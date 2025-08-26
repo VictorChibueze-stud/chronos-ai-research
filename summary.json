@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "records": 162,
+    "atr_period": 14,
+    "fractal_k": 2,
+    "zigzag": {
+      "pct_threshold": 0.015,
+      "atr_mult": 2.0,
+      "breach_mode": "close"
+    }
+  },
+  "counts": {
+    "fractal": {
+      "pivots": 24,
+      "events": 8
+    },
+    "zigzag": {
+      "pivots": 14,
+      "legs": 13,
+      "events": 5
+    }
+  }
+}
