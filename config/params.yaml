@@ -1,0 +1,20 @@
+# Global and per-symbol parameters for Chronos-AI.
+
+global:
+  base_timeframes:
+    - "1d"
+    - "4h"
+    - "1h"
+    - "15m"
+    - "5m"
+  min_rr: 3.0          # minimum risk:reward ratio to consider a trade
+  max_hold_days: 5     # initial assumption for swing-style holds
+  risk_per_trade_chf: 5.0
+
+deriv:
+  Volatility 10 Index:
+    enabled: true
+    note: "Initial test instrument"
+  Volatility 25 Index:
+    enabled: true
+    note: "Secondary test instrument"

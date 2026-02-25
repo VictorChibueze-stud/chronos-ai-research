@@ -1,0 +1,15 @@
+# Mapping of human-readable names to broker-specific symbol codes.
+# Initial focus: Deriv synthetic indices.
+
+deriv:
+  Volatility 10 Index: "R_10"
+  Volatility 25 Index: "R_25"
+  Volatility 50 Index: "R_50"
+  Volatility 75 Index: "R_75"
+  Volatility 100 Index: "R_100"
+  Boom 300 Index: "BOOM300"
+  Boom 500 Index: "BOOM500"
+  Boom 1000 Index: "BOOM1000"
+  Crash 300 Index: "CRASH300"
+  Crash 500 Index: "CRASH500"
+  Crash 1000 Index: "CRASH1000"

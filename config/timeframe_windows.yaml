@@ -1,0 +1,13 @@
+timeframes:
+  "1m":
+    lookback_days: 1.5
+  "5m":
+    lookback_days: 7.5
+  "15m":
+    lookback_days: 25.0
+  "1h":
+    lookback_days: 100.0
+  "4h":
+    lookback_days: 365.0
+  "1d":
+    lookback_days: 2190.0

@@ -186,6 +186,72 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
                     (l - prev_c).abs()], axis=1).max(axis=1)
     return tr.ewm(alpha=1/period, adjust=False).mean()
 
+# ---- EMA & CROSSOVER HELPERS ---------------------------------------------
+def ema(s: pd.Series, span: int) -> pd.Series:
+    return s.ewm(span=span, adjust=False).mean()
+
+def find_crosses(ema_fast: pd.Series, ema_slow: pd.Series) -> pd.DataFrame:
+    """
+    Detect EMA crossovers. Returns rows: {'type': 'CROSS_UP'|'CROSS_DOWN', 'i': int, 'ts': Timestamp}
+    """
+    diff = ema_fast - ema_slow
+    sign = (diff > 0).astype(int) - (diff < 0).astype(int)  # +1 / -1
+    prev = sign.shift(1).fillna(0)
+
+    events = []
+    for i in range(len(sign)):
+        if sign.iloc[i] == +1 and prev.iloc[i] == -1:
+            events.append({"type": "CROSS_UP", "i": i, "ts": ema_fast.index[i]})
+        elif sign.iloc[i] == -1 and prev.iloc[i] == +1:
+            events.append({"type": "CROSS_DOWN", "i": i, "ts": ema_fast.index[i]})
+    return pd.DataFrame(events)
+
+def annotate_pivots_with_ema(
+    pivots_df: pd.DataFrame,
+    ema_fast: pd.Series,
+    ema_slow: pd.Series,
+    crosses_df: pd.DataFrame,
+    window_before: int = 2,
+    window_after: int = 2,
+    mode: str = "confirm",  # "confirm" (>= pivot), "anticipate" (<= pivot), "around" (± window)
+):
+    pivots_df = pivots_df.copy()
+    pivots_df["ema_state_at_pivot"] = np.where(
+        ema_fast.iloc[pivots_df["index"].astype(int)].values > ema_slow.iloc[pivots_df["index"].astype(int)].values,
+        "bullish", "bearish"
+    )
+    pivots_df["cross_type_near_pivot"] = None
+    pivots_df["cross_ts"] = pd.NaT
+    pivots_df["cross_index"] = pd.NA
+    pivots_df["delta_bars_to_cross"] = pd.NA
+
+    crosses = crosses_df.to_dict("records")
+
+    for r in pivots_df.itertuples():
+        i = int(r.index)
+        # choose search window
+        if mode == "confirm":
+            lo, hi = i, i + window_after
+        elif mode == "anticipate":
+            lo, hi = i - window_before, i
+        else:  # "around"
+            lo, hi = i - window_before, i + window_after
+        lo = max(lo, 0); hi = min(hi, len(ema_fast) - 1)
+
+        nearest, best = None, 10**9
+        for ev in crosses:
+            if lo <= ev["i"] <= hi:
+                delta = abs(ev["i"] - i)
+                if delta < best:
+                    best = delta; nearest = ev
+        if nearest:
+            pivots_df.at[r.Index, "cross_type_near_pivot"] = nearest["type"]
+            pivots_df.at[r.Index, "cross_ts"] = nearest["ts"]
+            pivots_df.at[r.Index, "cross_index"] = nearest["i"]
+            pivots_df.at[r.Index, "delta_bars_to_cross"] = nearest["i"] - i
+
+    return pivots_df
+
 def compute_fractals(df: pd.DataFrame, k: int = 2,
                      strict_left: bool = True, strict_right: bool = False):
     """
@@ -470,8 +536,16 @@ def compute_zigzag(df: pd.DataFrame,
 # ---- Build outputs for both methods & save ----
 import json
 
+
 # ATR series (used by ZigZag and for reporting)
 df["ATR14"] = atr(df, 14)
+
+# ---- EMAs & crossovers (parameters you can tune) --------------------------
+EMA_FAST = 20
+EMA_SLOW = 50
+df["ema_fast"] = ema(df["close"], EMA_FAST)
+df["ema_slow"] = ema(df["close"], EMA_SLOW)
+ema_crosses_df = find_crosses(df["ema_fast"], df["ema_slow"])
 
 # Fractal pivots
 swing_highs, swing_lows = compute_fractals(df, k=4)
@@ -550,6 +624,7 @@ for (row, (i, ts, price)) in enumerate(zz_lows):
         "threshold_basis": meta["basis"]
     })
 
+
 zigzag_pivots_df = pd.DataFrame(zigzag_rows).sort_values(["index", "type"]).reset_index(drop=True)
 
 # ZigZag legs
@@ -587,8 +662,21 @@ if not zigzag_events_df.empty:
     zigzag_events_df.insert(0, "algo", "zigzag")
 
 # Save outputs
+
+# Attach EMA context to pivots; "confirm" = cross at/after pivot within 2 bars
+fractal_pivots_df = annotate_pivots_with_ema(
+    fractal_pivots_df, df["ema_fast"], df["ema_slow"], ema_crosses_df,
+    window_before=2, window_after=2, mode="confirm"
+)
+zigzag_pivots_df = annotate_pivots_with_ema(
+    zigzag_pivots_df, df["ema_fast"], df["ema_slow"], ema_crosses_df,
+    window_before=2, window_after=2, mode="confirm"
+)
+
+# Save updated files
 fractal_pivots_df.to_csv("fractal_pivots.csv", index=False)
 zigzag_pivots_df.to_csv("zigzag_pivots.csv", index=False)
+ema_crosses_df.to_csv("ema_crosses.csv", index=False)
 zigzag_legs_df.to_csv("zigzag_legs.csv", index=False)
 
 events_df = pd.concat([fractal_events_df, zigzag_events_df], ignore_index=True) if (
@@ -600,12 +688,15 @@ events_df = pd.concat([fractal_events_df, zigzag_events_df], ignore_index=True) 
 ])
 events_df.to_csv("events.csv", index=False)
 
+
+# (optional) include EMA params in summary.json
 summary = {
     "meta": {
         "records": int(len(df)),
         "atr_period": 14,
         "fractal_k": 2,
-        "zigzag": {"pct_threshold": 0.015, "atr_mult": 2.0, "breach_mode": "close"}
+        "zigzag": {"pct_threshold": 0.015, "atr_mult": 2.0, "breach_mode": "close"},
+        "ema": {"fast": EMA_FAST, "slow": EMA_SLOW}
     },
     "counts": {
         "fractal": {
