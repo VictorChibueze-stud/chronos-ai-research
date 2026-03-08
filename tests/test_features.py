@@ -5,7 +5,7 @@ import numpy as np
 
 from src.core.features import (
     ema, rsi, Candle, normalize_candles, detect_swings, compute_price_features,
-    compute_zigzag, detect_bos_choch_from_zigzag,
+    compute_zigzag, detect_bos_choch_from_zigzag, detect_swings_atr,
 )
 
 _STRUCTURE_MAP_KEYS = {"swings", "swing_highs", "swing_lows", "order_blocks", "fvg"}
@@ -283,3 +283,72 @@ def test_detect_bos_choch_clear_uptrend_then_reversal():
     for ev in events:
         assert "level" in ev, f"Missing 'level' key in {ev}"
         assert ev["level"] == ev["price"], "'level' must equal 'price'"
+
+
+# ============ PART 3: ATR ZigZag State Machine Tests ============
+
+def _make_sine_candles(n: int = 100, amplitude: float = 50.0, period: float = 10.0) -> list:
+    """Synthetic candles following a sine wave."""
+    base = datetime.utcnow()
+    candles = []
+    for i in range(n):
+        price = 1000.0 + amplitude * math.sin(i * math.pi / period)
+        candles.append(Candle(
+            timestamp=base + timedelta(minutes=i),
+            open=price,
+            high=price + 2.0,
+            low=price - 2.0,
+            close=price,
+        ))
+    return candles
+
+
+def test_detect_swings_atr_alternates():
+    """detect_swings_atr output must strictly alternate SH/SL on clear zigzag data."""
+    candles = _make_sine_candles(100)
+    pivots = detect_swings_atr(candles, atr_mult=1.0)
+    assert len(pivots) >= 4, f"Expected >= 4 pivots, got {len(pivots)}"
+    for i in range(1, len(pivots)):
+        assert pivots[i]["type"] != pivots[i - 1]["type"], (
+            f"Non-alternating at {i-1} and {i}: "
+            f"{pivots[i-1]['type']} -> {pivots[i]['type']}"
+        )
+
+
+def test_detect_swings_atr_append_only_behavior():
+    """Early pivots from a partial run must match the full run — no repainting."""
+    candles = _make_sine_candles(100)
+    partial = detect_swings_atr(candles[:50], atr_mult=1.5)
+    full = detect_swings_atr(candles, atr_mult=1.5)
+    n = len(partial)
+    assert full[:n] == partial, (
+        "First N pivots from full run must match partial run (no repainting)"
+    )
+
+
+def test_detect_swings_atr_required_keys():
+    """Every pivot must have required keys; type must be SH/SL; strength > 0."""
+    candles = _make_sine_candles(60, amplitude=30.0, period=8.0)
+    pivots = detect_swings_atr(candles, atr_mult=1.0)
+    required = {"type", "price", "index", "timestamp", "strength"}
+    for p in pivots:
+        assert required <= p.keys(), f"Pivot missing keys: {required - p.keys()}"
+        assert p["type"] in ("SH", "SL"), f"Invalid type: {p['type']}"
+        assert p["strength"] > 0, f"strength must be > 0, got {p['strength']}"
+
+
+def test_detect_swings_atr_atr_mult_effect():
+    """Higher atr_mult must produce strictly fewer pivots than lower atr_mult.
+
+    With period=2 the sine oscillates by ~50 pts every bar, so ATR converges
+    near 52 and the peak-to-trough reversal is ~54 pts.
+      mult=1.0 threshold ≈ 52  < 54  →  confirms on nearly every half-cycle
+      mult=3.0 threshold ≈ 156 > 54  →  stops confirming once ATR warms up
+    """
+    candles = _make_sine_candles(100, amplitude=50.0, period=2.0)
+    pivots_loose = detect_swings_atr(candles, atr_mult=1.0)
+    pivots_strict = detect_swings_atr(candles, atr_mult=3.0)
+    assert len(pivots_loose) > len(pivots_strict), (
+        f"atr_mult=1.0 gave {len(pivots_loose)} pivots, "
+        f"atr_mult=3.0 gave {len(pivots_strict)} — expected more with looser threshold"
+    )

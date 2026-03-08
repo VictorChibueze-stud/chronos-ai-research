@@ -19,6 +19,9 @@ pytest tests/test_features.py::test_function_name
 
 # Visual feature exploration (edit SYMBOL/TIMEFRAME/CSV_PATH at top of the script first)
 python -m exploration.feature_explorer
+
+# Live EDA: fetch Deriv OHLC and plot trend/structure features (requires .env)
+python -m exploration.eda_deriv_trend
 ```
 
 ## Environment Setup
@@ -48,6 +51,7 @@ Candle (OHLC struct)
 | Path | Responsibility |
 |------|----------------|
 | `src/core/features.py` | Pure, stateless feature engine. Defines `Candle` dataclass and `compute_price_features()`. All indicator and market-structure logic (EMAs, ATR, swing highs/lows, BOS/CHOCH, FVGs, regime tags). |
+| `src/core/trend_structure.py` | `detect_structure(candles)` — pure BOS state machine that segments candles into alternating impulse/retracement legs and emits BOS events. No indicator lookback; purely price-action driven. |
 | `src/core/signals.py` | Defines `Signal`, `StrategyContext`, and `StrategyFn` protocol. Strategies are pluggable callables. |
 | `src/core/risk.py` | Broker-agnostic position sizing, drawdown limits, kill-switch logic. |
 | `src/core/timeframes.py` | Loads `config/timeframe_windows.yaml`; computes deterministic start/end windows for a given timeframe. |
@@ -79,10 +83,11 @@ Candle (OHLC struct)
 ## Development Phases
 
 The project tracks progress in `progress.json`. Phases:
-- **Phase 0** (complete): Repo structure, configs, system spec
-- **Phase 1**: Core feature engine (`src/core/features.py`) with full unit tests
-- **Phase 2**: Data adapters (Deriv + CSV)
-- **Phase 3**: Backtest engine and metrics
-- **Phase 4**: Strategy API and baseline strategy
-- **Phase 5**: Risk engine
-- **Phase 6**: LLM/agent integration (Langflow)
+- **Phase 0** (done): Repo structure, configs, system spec
+- **Phase 1** (done): Core feature engine (`src/core/features.py`) with full unit tests
+- **Phase 2** (done): Data adapters (Deriv + CSV)
+- **Phase 3** (in progress): Backtest engine and metrics
+- **Phase E1** (in progress): EDA — live Deriv data fetch and visual validation
+- **Phase 4** (in progress): Strategy API and baseline strategy
+- **Phase 5** (in progress): Risk engine
+- **Phase 6** (in progress): LLM/agent integration (Langflow)

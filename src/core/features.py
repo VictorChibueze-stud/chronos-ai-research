@@ -11,9 +11,30 @@ from datetime import datetime
 from typing import Sequence, Dict, Any, List, Optional, Iterable
 
 import math
+import pathlib
+
 import numpy as np
 import pandas as pd
+import yaml
 from dateutil.parser import parse as parse_date
+
+
+_TF_WINDOWS_PATH = pathlib.Path(__file__).parent.parent.parent / "config" / "timeframe_windows.yaml"
+
+
+def _get_atr_mult(timeframe: str) -> float:
+    """Return atr_mult for *timeframe* from timeframe_windows.yaml, defaulting to 2.0."""
+    _aliases = {"1H": "1h", "4H": "4h", "D": "1d"}
+    try:
+        with open(_TF_WINDOWS_PATH) as fh:
+            cfg = yaml.safe_load(fh)
+        tfs = cfg.get("timeframes", {})
+        for key in (timeframe, timeframe.lower(), _aliases.get(timeframe)):
+            if key and key in tfs and "atr_mult" in tfs[key]:
+                return float(tfs[key]["atr_mult"])
+    except Exception:
+        pass
+    return 2.0
 
 
 @dataclass
@@ -359,6 +380,79 @@ def detect_swings(
                 alternated[-1] = s
 
     return alternated
+
+
+def detect_swings_atr(candles: List["Candle"], atr_mult: float = 2.0) -> List[Dict[str, Any]]:
+    """ATR-based binary state-machine zigzag swing detector.
+
+    Walks candles once, confirming a swing only when the reversal from the
+    running extreme exceeds ``atr_mult * ATR(14)``.  Output is guaranteed to
+    strictly alternate SH/SL and is append-only (no repainting).
+
+    Each pivot dict has keys: type, price, index, timestamp, strength.
+    """
+    if len(candles) < 2:
+        return []
+
+    highs_arr = [c.high for c in candles]
+    lows_arr = [c.low for c in candles]
+    closes_arr = [c.close for c in candles]
+    atr_arr = atr(highs_arr, lows_arr, closes_arr, n=14)
+
+    # Initialise direction from first two closes
+    direction = "up" if candles[1].close > candles[0].close else "down"
+
+    if direction == "up":
+        candidate_price = candles[0].high
+        candidate_index = 0
+    else:
+        candidate_price = candles[0].low
+        candidate_index = 0
+
+    confirmed_pivots: List[Dict[str, Any]] = []
+
+    for i in range(1, len(candles)):
+        atr_val = float(atr_arr[i])
+        if math.isnan(atr_val):
+            continue
+
+        threshold = atr_val * atr_mult
+
+        if direction == "up":
+            if candles[i].high > candidate_price:
+                candidate_price = candles[i].high
+                candidate_index = i
+
+            if candidate_price - candles[i].low > threshold:
+                confirmed_pivots.append({
+                    "type": "SH",
+                    "price": candidate_price,
+                    "index": candidate_index,
+                    "timestamp": candles[candidate_index].timestamp,
+                    "strength": (candidate_price - candles[i].low) / atr_val,
+                })
+                direction = "down"
+                candidate_price = candles[i].low
+                candidate_index = i
+
+        else:  # direction == "down"
+            if candles[i].low < candidate_price:
+                candidate_price = candles[i].low
+                candidate_index = i
+
+            if candles[i].high - candidate_price > threshold:
+                confirmed_pivots.append({
+                    "type": "SL",
+                    "price": candidate_price,
+                    "index": candidate_index,
+                    "timestamp": candles[candidate_index].timestamp,
+                    "strength": (candles[i].high - candidate_price) / atr_val,
+                })
+                direction = "up"
+                candidate_price = candles[i].high
+                candidate_index = i
+
+    return confirmed_pivots
 
 
 def detect_bos_choch(closes: Sequence[float], highs: Sequence[float], lows: Sequence[float]) -> List[Dict[str, Any]]:
@@ -723,8 +817,8 @@ def compute_price_features(candles: List[Candle], timeframe: str, max_lookback: 
     adx14 = adx(highs, lows, closes, n=14)
 
     # Structure
-    swings = detect_swings(highs, lows, lookback=5, candles=candles, atr_arr=atr14)
-    swings = compute_zigzag(swings, candles=candles, atr_arr=atr14, min_leg_atr=min_leg_atr_for_tf)
+    atr_mult = _get_atr_mult(timeframe)
+    swings = detect_swings_atr(candles, atr_mult=atr_mult)
     bos_events = detect_bos_choch(closes, highs, lows)
     fvg = detect_fvg(highs, lows)
     sweeps = detect_liquidity_sweeps(highs, lows, closes, lookback=min(60, len(candles) - 1))
