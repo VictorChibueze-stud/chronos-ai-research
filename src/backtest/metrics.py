@@ -49,4 +49,3 @@ def compute_equity_metrics(trades: List[BacktestTrade]) -> EquityMetrics:
 		avg_pnl_per_trade=avg_pnl,
 		max_drawdown=max_dd,
 	)
-"""Stub module to be implemented in later phases."""

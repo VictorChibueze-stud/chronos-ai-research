@@ -109,11 +109,11 @@ def build_snapshot(candles: List[Candle], timeframe: str) -> MarketSnapshot:
     # structure_map may provide 'swings' list with dicts, or 'swing_highs' tuples
     swings = struct.get("swings") or []
     if swings:
-        # find last HH and LL
+        # find last SH and SL
         for s in reversed(swings):
-            if s.get("type") == "HH" and recent_high is None:
+            if s.get("type") == "SH" and recent_high is None:
                 recent_high = s.get("price")
-            if s.get("type") == "LL" and recent_low is None:
+            if s.get("type") == "SL" and recent_low is None:
                 recent_low = s.get("price")
             if recent_high is not None and recent_low is not None:
                 break

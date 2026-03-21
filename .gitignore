@@ -48,3 +48,38 @@ tmpclaude-*
 archive/*.csv
 archive/*.json
 archive/*.png
+
+# Local agent files
+.agents/
+
+# Pytest cache
+.pytest_cache/
+
+# Data folder (candles and scanner results)
+data/
+
+# Generated output
+out/
+
+# Exploration pycache
+exploration/__pycache__/
+
+# Skills lock (machine-specific)
+skills-lock.json
+# Local agent files
+.agents/
+
+# Pytest cache
+.pytest_cache/
+
+# Data folder
+data/
+
+# Generated output
+out/
+
+# Exploration pycache
+exploration/__pycache__/
+
+# Skills lock
+skills-lock.json

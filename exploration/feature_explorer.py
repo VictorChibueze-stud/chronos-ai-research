@@ -42,7 +42,7 @@ def plot_swings(times, closes, swings, out_path: Path):
     plt.plot(times, closes, label="close")
     for s in swings:
         idx = s["index"]
-        plt.scatter(times[idx], closes[idx], marker=("^" if s["type"] == "HH" else "v"), s=100, label=s["type"])
+        plt.scatter(times[idx], closes[idx], marker=("^" if s["type"] == "SH" else "v"), s=100, label=s["type"])
     plt.title(f"{SYMBOL} Swings {TIMEFRAME}")
     plt.legend()
     plt.tight_layout()

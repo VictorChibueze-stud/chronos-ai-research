@@ -134,6 +134,33 @@ def ema(values: Sequence[float], n: int) -> np.ndarray:
     return pd.Series(a).ewm(span=n, adjust=False).mean().to_numpy()
 
 
+def compute_ema(candles: Sequence[Candle], period: int) -> List[Optional[float]]:
+    """Return the close-price EMA for a candle sequence.
+
+    The returned list always matches ``len(candles)``. Values before the seed
+    window is complete are ``None``. The EMA is seeded with the simple mean of
+    the first ``period`` closes.
+    """
+    if period <= 0:
+        raise ValueError("period must be > 0")
+
+    closes = [float(candle.close) for candle in candles]
+    if len(closes) < period:
+        return [None] * len(closes)
+
+    multiplier = 2.0 / (period + 1)
+    ema_values: List[Optional[float]] = [None] * len(closes)
+    seed = sum(closes[:period]) / period
+    ema_values[period - 1] = seed
+
+    previous_ema = seed
+    for index in range(period, len(closes)):
+        previous_ema = closes[index] * multiplier + previous_ema * (1.0 - multiplier)
+        ema_values[index] = previous_ema
+
+    return ema_values
+
+
 def rma(values: Sequence[float], n: int) -> np.ndarray:
     # Wilder moving average (RMA)
     a = np.asarray(values, dtype=float)
@@ -873,4 +900,3 @@ def compute_price_features(candles: List[Candle], timeframe: str, max_lookback: 
         "recent_window": recent_window,
     }
     return features
-"""Stub module to be implemented in later phases."""

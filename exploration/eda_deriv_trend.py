@@ -93,9 +93,9 @@ def main(argv: List[str]) -> int:
     recent_sh = None
     recent_sl = None
     for s in reversed(swings):
-        if s.get("type") in ("HH", "SH", "swing_high") and recent_sh is None:
+        if s.get("type") in ("SH", "swing_high") and recent_sh is None:
             recent_sh = s
-        if s.get("type") in ("LL", "SL", "swing_low") and recent_sl is None:
+        if s.get("type") in ("SL", "swing_low") and recent_sl is None:
             recent_sl = s
         if recent_sh and recent_sl:
             break
@@ -162,10 +162,10 @@ def main(argv: List[str]) -> int:
         idx = s.get("index")
         if idx is None:
             continue
-        if s.get("type") == "HH":
+        if s.get("type") == "SH":
             sh_x.append(dates[idx])
             sh_y.append(s.get("price"))
-        if s.get("type") == "LL":
+        if s.get("type") == "SL":
             sl_x.append(dates[idx])
             sl_y.append(s.get("price"))
     if sh_x:
