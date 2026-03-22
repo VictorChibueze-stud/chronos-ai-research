@@ -1,357 +1,466 @@
 """Recursive structural depth walker for Chronos-AI.
 
-Pure stateless module. No side effects. No file I/O.
+Depth model:
+- A new depth level is created only when a trend that started from the prior
+  depth's CHoCH zone crosses that prior depth's BOS (structural level).
+- That crossing trend slice becomes the next depth input.
 
-Design decision — avoiding double identify_trend calls:
-  _walk_level does NOT call analyze_retracement_leg (which would run identify_trend
-  internally). Instead, _walk_level runs identify_trend exactly once per level and
-  then delegates to a local helper (_build_analysis_from_rmt) that builds the
-  analysis dict directly from the already-computed rmt_result. This avoids the
-  double-computation that would result from calling analyze_retracement_leg followed
-  by a second identify_trend for find_response_move.
+Pure stateless module. No side effects. No file I/O.
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from src.core.choch_zone import compute_choch_proximity, get_active_choch_zone
-from src.core.retracement_analysis import find_attempts, find_rmt_structural_level
-from src.core.trend_id import identify_trend
+from src.core.choch_zone import get_active_choch_zone
+from src.core.trend_id import (
+    identify_trend,
+    compute_internal_structure,
+    _collect_candidates,
+    _score_candidates,
+)
 
-# ------------------------------------------------------------------------
-# Private helpers
-# ------------------------------------------------------------------------
+RMT_DEFAULT_FILTER_CONFIG = {
+    "use_parent_relative_filter": False,
+    "min_impulse_parent_ratio": 0.15,
+    "use_momentum_filter": False,
+    "min_momentum_ratio": 0.3,
+    "use_dominance_filter": False,
+    "min_dominance_ratio": 1.2,
+}
 
-
-def _build_analysis_dict(
-    retracement_leg: Dict[str, Any],
-    slice_candles: List[Any],
-    current_price: float,
-    rmt_result: Dict[str, Any],
-    global_trend: str,
-) -> Dict[str, Any]:
-    """Build the same-schema analysis dict as analyze_retracement_leg but from a
-    pre-computed rmt_result, so identify_trend is never called twice per level."""
-    all_legs = rmt_result["legs"]
-    confirmed_legs = [l for l in all_legs if l.get("confirmed") is True]
-
-    base = {
-        "rmt_trend": rmt_result["trend"],
-        "rmt_leg_count": len(all_legs),
-        "rmt_confirmed_leg_count": len(confirmed_legs),
-        "structural_level": None,
-        "attempts": [],
-        "attempt_count": 0,
-        "most_recent_attempt": None,
-        "most_recent_attempt_result": None,
-        "mitigation_count": 0,
-        "rmt_choch_zone": None,
-        "rmt_choch_proximity": None,
-        "slice_start_index": int(retracement_leg["start_index"]),
-        "slice_end_index": int(retracement_leg["end_index"]),
-        "slice_candle_count": len(slice_candles),
-        "analysis_valid": False,
-    }
-
-    if not confirmed_legs:
-        return base
-
-    structural_level = find_rmt_structural_level(rmt_result, global_trend)
-    if structural_level is None:
-        return base
-
-    attempts = find_attempts(rmt_result, structural_level, global_trend)
-    most_recent_attempt = attempts[-1] if attempts else None
-    mitigation_count = sum(1 for a in attempts if a["attempt_result"] == "false_break")
-
-    rmt_choch = get_active_choch_zone(rmt_result["legs"], rmt_result["trend"], slice_candles)
-
-    rmt_choch_proximity = None
-    if rmt_choch is not None:
-        rmt_choch_proximity = compute_choch_proximity(
-            rmt_choch["choch_zone"], current_price
-        )
-
-    base.update(
-        {
-            "structural_level": structural_level,
-            "attempts": attempts,
-            "attempt_count": len(attempts),
-            "most_recent_attempt": most_recent_attempt,
-            "most_recent_attempt_result": (
-                most_recent_attempt["attempt_result"] if most_recent_attempt else None
-            ),
-            "mitigation_count": mitigation_count,
-            "rmt_choch_zone": rmt_choch["choch_zone"] if rmt_choch else None,
-            "rmt_choch_proximity": rmt_choch_proximity,
-            "analysis_valid": True,
-        }
-    )
-    return base
+INTERNAL_TF_ORDER = ["15m", "5m"]
 
 
-def _build_waiting_for(deepest_level: Dict[str, Any]) -> str:
-    """Construct the human-readable waiting_for message from the deepest level."""
-    reason = deepest_level.get("termination_reason") or "invalid_analysis"
-    analysis = deepest_level.get("analysis") or {}
-
-    if reason == "no_attempt_found":
-        structural_level = analysis.get("structural_level")
-        price = structural_level["price"] if structural_level else "unknown"
-        return f"Waiting for retracement to reach structural level at {price}"
-
-    if reason == "waiting_for_response_move":
-        most_recent = analysis.get("most_recent_attempt")
-        attempt_result = most_recent["attempt_result"] if most_recent else "unknown"
-        price = most_recent["end_price"] if most_recent else "unknown"
-        return f"Waiting for response move after {attempt_result} attempt at {price}"
-
-    if reason == "max_depth_reached":
-        return "Maximum analysis depth reached — monitor active CHoCH zone"
-
-    if reason == "child_slice_too_small":
-        return "Price action too compressed for further analysis"
-
-    return "Insufficient structure in current retracement"
-
-
-def _empty_analysis(retracement_leg: Dict[str, Any], slice_candles: List[Any], rmt_leg_count: int = 0) -> Dict[str, Any]:
-    return {
-        "rmt_trend": "range",
-        "rmt_leg_count": rmt_leg_count,
-        "rmt_confirmed_leg_count": 0,
-        "structural_level": None,
-        "attempts": [],
-        "attempt_count": 0,
-        "most_recent_attempt": None,
-        "most_recent_attempt_result": None,
-        "mitigation_count": 0,
-        "rmt_choch_zone": None,
-        "rmt_choch_proximity": None,
-        "slice_start_index": int(retracement_leg["start_index"]),
-        "slice_end_index": int(retracement_leg["end_index"]),
-        "slice_candle_count": len(slice_candles),
-        "analysis_valid": False,
-    }
-
-
-# ------------------------------------------------------------------------
-# Public API
-# ------------------------------------------------------------------------
-
-
-# Finds the Response Move — the retracement leg within the RMT that started
-# after the most recent Attempt and represents the market moving back toward
-# the RMT's CHoCH zone after failing to break or having broken structure.
-# The Response Move is the next confirmed retracement leg after the Attempt leg.
-# Returns None if no such leg exists (system is waiting for the market to move).
-def find_response_move(
-    rmt_result: Dict[str, Any],
-    most_recent_attempt: Dict[str, Any],
+def find_crossing_attempt(
+    candles: List[Any],
+    slice_start: int,
+    slice_end: int,
+    first_move_end: int,
+    structural_level: Dict[str, Any],
+    choch_zone: Optional[Dict[str, Any]],
     global_trend: str,
 ) -> Optional[Dict[str, Any]]:
-    """Find the first confirmed retracement leg after the most recent Attempt.
+    """Find the first crossing attempt after the first move.
 
-    Args:
-        rmt_result: Result dict from identify_trend on the retracement slice.
-        most_recent_attempt: Attempt dict from find_attempts (must have leg_index).
-        global_trend: Trend direction of the parent context — "up" or "down".
-
-    Returns:
-        Dict with leg metadata relative to the RMT slice, or None.
+    Step 1: scan forward from first_move_end to find the first candle
+            where price crosses the BOS level.
+    Step 2: scan backwards from that candle to find where the move started
+            — the lowest low (uptrend) or highest high (downtrend) before
+            the crossing.
+    Step 3: verify the start is within or near the CHoCH zone.
+    Step 4: return the crossing attempt dict.
     """
-    _ = global_trend  # Reserved for future directional response constraints.
-    legs = rmt_result["legs"]
-    start_search = most_recent_attempt["leg_index"] + 1
+    bos_price = float(structural_level["price"])
+    scan_end = min(slice_end, len(candles) - 1)
 
-    for j in range(start_search, len(legs)):
-        cand = legs[j]
-        if (
-            cand.get("type") == "retracement"
-            and cand.get("confirmed") is True
-        ):
-            end_index = cand.get("end_index")
-            return {
-                "leg_index": j,
-                "start_index": int(cand["start_index"]),
-                "end_index": int(end_index) if end_index is not None else None,
-                "start_price": float(cand["start_price"]),
-                "end_price": float(cand["end_price"]) if cand.get("end_price") is not None else None,
-                "confirmed": True,
-            }
+    # Step 1: find first candle that crosses BOS
+    crossing_index = None
+    for i in range(first_move_end + 1, scan_end + 1):
+        if global_trend == "down":
+            # retracement goes up — BOS is crossed when high >= bos_price
+            if candles[i].high >= bos_price:
+                crossing_index = i
+                break
+        else:
+            # retracement goes down — BOS is crossed when low <= bos_price
+            if candles[i].low <= bos_price:
+                crossing_index = i
+                break
 
-    return None
+    if crossing_index is None:
+        return None
+
+    # Record first BOS touch before scanning for the move extreme
+    first_crossing_index = crossing_index
+
+    # Step 1b: extend forward to find the extreme of the crossing move
+    if global_trend == "down":
+        # retracement goes up — find the highest high before two consecutive bearish candles
+        extreme_index = crossing_index
+        extreme_price = candles[crossing_index].high
+        for i in range(crossing_index + 1, scan_end + 1):
+            if candles[i].high > extreme_price:
+                extreme_price = candles[i].high
+                extreme_index = i
+            else:
+                # Require two consecutive bearish candles to confirm reversal
+                if (i + 1 <= scan_end
+                        and candles[i].low < candles[i - 1].low
+                        and candles[i].high < candles[i - 1].high
+                        and candles[i + 1].low < candles[i].low
+                        and candles[i + 1].high < candles[i].high):
+                    break
+        crossing_index = extreme_index
+        crossing_price = extreme_price
+    else:
+        # retracement goes down — find the lowest low before two consecutive bullish candles
+        extreme_index = crossing_index
+        extreme_price = candles[crossing_index].low
+        for i in range(crossing_index + 1, scan_end + 1):
+            if candles[i].low < extreme_price:
+                extreme_price = candles[i].low
+                extreme_index = i
+            else:
+                if (i + 1 <= scan_end
+                        and candles[i].high > candles[i - 1].high
+                        and candles[i].low > candles[i - 1].low
+                        and candles[i + 1].high > candles[i].high
+                        and candles[i + 1].low > candles[i].low):
+                    break
+        crossing_index = extreme_index
+        crossing_price = extreme_price
+
+    # Step 2: scan backwards from first_crossing_index (first BOS touch) to find move start
+    # For uptrend retracement (going up): find the lowest low between
+    # first_move_end and first_crossing_index
+    # For downtrend retracement (going down): find the highest high
+    move_start_index = first_move_end
+    if global_trend == "down":
+        # retracement going up — find lowest low
+        lowest_price = float('inf')
+        for i in range(first_move_end, first_crossing_index):
+            if candles[i].low < lowest_price:
+                lowest_price = candles[i].low
+                move_start_index = i
+    else:
+        # retracement going down — find highest high
+        highest_price = float('-inf')
+        for i in range(first_move_end, first_crossing_index):
+            if candles[i].high > highest_price:
+                highest_price = candles[i].high
+                move_start_index = i
+
+    move_start_price = (candles[move_start_index].low
+                        if global_trend == "down"
+                        else candles[move_start_index].high)
+
+    # Step 3: verify start is within or near CHoCH zone
+    if choch_zone is not None:
+        lower = float(choch_zone["lower_boundary"])
+        upper = float(choch_zone["upper_boundary"])
+        zone_width = max(upper - lower, 1.0)
+        if global_trend == "down":
+            in_zone = lower <= move_start_price <= upper
+            near_zone = (lower - 2.0 * zone_width) <= move_start_price < lower
+        else:
+            in_zone = lower <= move_start_price <= upper
+            near_zone = upper < move_start_price <= (upper + 2.0 * zone_width)
+        if not (in_zone or near_zone):
+            return None
+
+    return {
+        "start_index": move_start_index - slice_start,
+        "end_index": crossing_index - slice_start,
+        "start_price": move_start_price,
+        "end_price": crossing_price,
+        "global_start_index": move_start_index,
+        "global_end_index": crossing_index,
+        "choch_zone": choch_zone,
+    }
 
 
-# Recursive walker. At each depth level:
-# 1. Runs analyze_retracement_leg on the given retracement leg
-# 2. Finds the Response Move after the most recent Attempt
-# 3. If Response Move exists and depth limit not reached, recurses
-# 4. Returns a level dict containing the analysis, response move, and child levels
-# global_offset: the start_index of this slice relative to the full candle list.
-#                Used so all indices can be converted to global space by callers.
 def _walk_level(
     candles: List[Any],
-    retracement_leg: Dict[str, Any],
+    slice_start: int,
+    slice_end: int,
     global_trend: str,
     filter_config: Dict[str, Any],
+    rmt_filter_config: Dict[str, Any],
     current_depth: int,
     max_depth: int,
-    global_offset: int,
+    binance_symbol: Optional[str] = None,
+    known_first_move_end_index: Optional[int] = None,
+    known_first_move_end_price: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Recursive implementation of the structural depth walk.
-
-    Args:
-        candles: Full global candle list.
-        retracement_leg: Leg dict with indices RELATIVE to this level's slice.
-        global_trend: Parent trend direction — "up" or "down".
-        filter_config: The six identify_trend filter parameters as a dict.
-        current_depth: Recursion depth, starting at 1.
-        max_depth: Maximum permitted depth.
-        global_offset: Global candle index where this level's slice begins.
-
-    Returns:
-        Level dict with depth, global_offset, analysis, response_move, child.
-    """
-    level_dict: Dict[str, Any] = {
+    """Recursively build structural depth levels."""
+    level: Dict[str, Any] = {
         "depth": current_depth,
-        "global_offset": global_offset,
-        "retracement_leg": retracement_leg,
-        "analysis": None,
-        "response_move": None,
+        "slice_start": int(slice_start),
+        "slice_end": int(slice_end),
+        "rmt_result": None,
+        "first_impulse": None,
+        "first_impulse_global_start": None,
+        "first_impulse_global_end": None,
+        "internal_result": None,
+        "internal_tf_used": "current",
+        "internal_tf_slice_timestamps": None,
+        "structural_level": None,
+        "choch_zone": None,
+        "crossing_attempt": None,
+        "choch_mitigated": False,
+        "termination_reason": "slice_too_small",
         "child": None,
-        "termination_reason": None,
     }
 
-    # Validate the retracement leg
-    if not retracement_leg.get("confirmed") or retracement_leg.get("end_index") is None:
-        level_dict["analysis"] = None
-        level_dict["termination_reason"] = "invalid_analysis"
-        return level_dict
+    if slice_start < 0 or slice_end < slice_start or slice_end >= len(candles):
+        return level
 
-    rel_start_idx = int(retracement_leg["start_index"])
-    rel_end_idx = int(retracement_leg["end_index"])
-    start_idx = global_offset + rel_start_idx
-    end_idx = global_offset + rel_end_idx
-    slice_candles = candles[start_idx : end_idx + 1]
-
+    slice_candles = candles[slice_start : slice_end + 1]
     if len(slice_candles) < 10:
-        level_dict["analysis"] = None
-        level_dict["termination_reason"] = "child_slice_too_small"
-        return level_dict
+        return level
 
-    # Run identify_trend exactly once for this level (see module docstring).
-    rmt_result = identify_trend(slice_candles, **filter_config)
+    first_move_start = slice_start
 
-    # NOTE: rmt_result["legs"] indices are relative to this level's slice.
-    # To get global candle indices, add layer_start_index to each leg index.
-    level_dict["layer_start_index"] = global_offset + int(retracement_leg["start_index"])
-    level_dict["layer_end_index"] = (
-        global_offset + int(retracement_leg["end_index"])
-        if retracement_leg.get("end_index") is not None
-        else None
+    if known_first_move_end_index is not None and known_first_move_end_price is not None:
+        first_move_end = known_first_move_end_index
+        first_move_end_price = known_first_move_end_price
+    else:
+        direction = "high" if global_trend == "down" else "low"
+        candidates = _collect_candidates(candles, slice_start, direction, min_swing_candles=3)
+        scored = _score_candidates(candles, candidates, direction)
+
+        total_range = max(c.high for c in slice_candles) - min(c.low for c in slice_candles)
+        min_distance = filter_config.get("min_impulse_parent_ratio", 0.15) * total_range
+        anchor_price = float(candles[slice_start].close)
+
+        qualified = [
+            c for c in scored
+            if abs(float(c["price"]) - anchor_price) >= min_distance
+        ]
+        if not qualified:
+            level["termination_reason"] = "no_structural_level"
+            return level
+
+        if global_trend == "down":
+            best = max(qualified, key=lambda c: (c.get("score", 0.0), c["price"], -c["index"]))
+        else:
+            best = max(qualified, key=lambda c: (c.get("score", 0.0), -c["price"], -c["index"]))
+
+        first_move_end = int(best["index"])
+        first_move_end_price = float(best["price"])
+
+    structural_level = {
+        "price": first_move_end_price,
+        "source_leg_end_index": first_move_end,
+    }
+    level["structural_level"] = structural_level
+
+    level["first_impulse"] = {
+        "type": "impulse",
+        "confirmed": True,
+        "start_price": float(candles[slice_start].close),
+        "end_price": first_move_end_price,
+        "start_index": slice_start,
+        "end_index": first_move_end,
+    }
+    level["first_impulse_global_start"] = first_move_start
+    level["first_impulse_global_end"] = first_move_end
+
+    first_move_candles = candles[first_move_start : first_move_end + 1]
+
+    _legs_for_internal = [{
+        "type": "impulse",
+        "confirmed": True,
+        "start_price": float(first_move_candles[0].close),
+        "end_price": float(first_move_candles[-1].close),
+        "start_index": 0,
+        "end_index": len(first_move_candles) - 1,
+        "end_timestamp": first_move_candles[-1].timestamp,
+        "start_timestamp": first_move_candles[0].timestamp,
+        "slope": None,
+        "internal_structure": None,
+    }]
+    compute_internal_structure(
+        first_move_candles,
+        _legs_for_internal,
+        trend_confirmation_pct=0.005,
+        **filter_config
     )
-    level_dict["rmt_result"] = rmt_result
+    internal_result = _legs_for_internal[0].get("internal_structure")
+    internal_tf_used = "current"
+    internal_tf_slice_timestamps = None
 
-    if rmt_result["trend"] == "range":
-        level_dict["analysis"] = _empty_analysis(
-            retracement_leg,
-            slice_candles,
-            rmt_leg_count=len(rmt_result["legs"]),
+    confirmed_internal = [
+        leg for leg in (internal_result or {}).get("legs", [])
+        if leg.get("confirmed")
+    ]
+
+    should_attempt_fallback = (
+        binance_symbol is not None
+        and (
+            len(confirmed_internal) < 3
+            or (internal_tf_used == "current" and len(first_move_candles) < 100)
         )
-        level_dict["termination_reason"] = "invalid_analysis"
-        return level_dict
+    )
 
-    analysis = _build_analysis_dict(
-        retracement_leg,
-        slice_candles,
-        current_price=float(candles[end_idx].close),
-        rmt_result=rmt_result,
+    if should_attempt_fallback:
+        from src.adapters.binance_data import fetch_binance_ohlc_sync
+
+        impulse_start_ts = candles[first_move_start].timestamp
+        impulse_end_ts = candles[first_move_end].timestamp
+
+        for tf_key in INTERNAL_TF_ORDER:
+            try:
+                tf_candles = fetch_binance_ohlc_sync(
+                    binance_symbol,
+                    tf_key,
+                    start_time=impulse_start_ts,
+                )
+                tf_slice = [
+                    candle for candle in tf_candles
+                    if impulse_start_ts <= candle.timestamp <= impulse_end_ts
+                ]
+                if len(tf_slice) < 100:
+                    continue
+
+                _legs_for_tf = [{
+                    "type": "impulse",
+                    "confirmed": True,
+                    "start_price": float(tf_slice[0].close),
+                    "end_price": float(tf_slice[-1].close),
+                    "start_index": 0,
+                    "end_index": len(tf_slice) - 1,
+                    "end_timestamp": tf_slice[-1].timestamp,
+                    "start_timestamp": tf_slice[0].timestamp,
+                    "slope": None,
+                    "internal_structure": None,
+                }]
+                compute_internal_structure(
+                    tf_slice,
+                    _legs_for_tf,
+                    trend_confirmation_pct=0.005,
+                    **filter_config
+                )
+                tf_internal = _legs_for_tf[0].get("internal_structure")
+                tf_outer_confirmed = [
+                    leg for leg in (tf_internal or {}).get("legs", [])
+                    if leg.get("confirmed")
+                ]
+                tf_inner_confirmed = []
+                for tf_leg in tf_outer_confirmed:
+                    if tf_leg.get("internal_structure"):
+                        tf_inner_confirmed += [
+                            internal_leg
+                            for internal_leg in tf_leg["internal_structure"].get("legs", [])
+                            if internal_leg.get("confirmed")
+                        ]
+                total_tf_confirmed = len(tf_outer_confirmed) + len(tf_inner_confirmed)
+                if total_tf_confirmed >= 3:
+                    internal_result = tf_internal
+                    first_move_candles = tf_slice
+                    internal_tf_used = tf_key
+                    internal_tf_slice_timestamps = [candle.timestamp for candle in tf_slice]
+                    break
+            except Exception:
+                continue
+
+    if internal_result is not None:
+        compute_internal_structure(
+            first_move_candles,
+            internal_result["legs"],
+            trend_confirmation_pct=0.005,
+            **filter_config,
+        )
+    level["first_move_candles"] = first_move_candles
+    level["internal_result"] = internal_result
+    level["internal_tf_used"] = internal_tf_used
+    level["internal_tf_slice_timestamps"] = internal_tf_slice_timestamps
+
+    if internal_result is not None and internal_result.get("trend") != "range":
+        choch = get_active_choch_zone(
+            internal_result["legs"],
+            internal_result["trend"],
+            first_move_candles,
+        )
+        choch_zone = choch["choch_zone"] if choch else None
+
+        # If outer int_result has only 1 confirmed impulse, look inside leg[0]'s internal_structure
+        if choch_zone is None:
+            first_leg = next(
+                (
+                    l for l in internal_result["legs"]
+                    if l.get("type") == "impulse" and l.get("confirmed")
+                    and l.get("internal_structure") is not None
+                ),
+                None,
+            )
+            if first_leg is not None:
+                inner = first_leg["internal_structure"]
+                inner_start = int(first_leg["start_index"])
+                inner_end = int(first_leg["end_index"])
+                inner_candles = first_move_candles[inner_start : inner_end + 1]
+                inner_choch = get_active_choch_zone(
+                    inner["legs"],
+                    inner["trend"],
+                    inner_candles,
+                )
+                choch_zone = inner_choch["choch_zone"] if inner_choch else None
+
+        # Final fallback: last confirmed retracement range
+        if choch_zone is None:
+            confirmed_rets = [
+                l for l in internal_result.get("legs", [])
+                if l.get("type") == "retracement" and l.get("confirmed")
+                and l.get("start_price") is not None and l.get("end_price") is not None
+            ]
+            if confirmed_rets:
+                last_ret = confirmed_rets[-1]
+                lower = min(float(last_ret["start_price"]), float(last_ret["end_price"]))
+                upper = max(float(last_ret["start_price"]), float(last_ret["end_price"]))
+                choch_zone = {
+                    "lower_boundary": lower,
+                    "upper_boundary": upper,
+                    "zone_width_pct": 0.0,
+                    "zone_midpoint": (lower + upper) / 2,
+                    "trend_direction": internal_result.get("trend", "up"),
+                    "source_impulse_start_index": 0,
+                    "source_impulse_end_index": 0,
+                    "prior_impulse_end_index": 0,
+                }
+        level["choch_zone"] = choch_zone
+    else:
+        choch_zone = None
+        level["choch_zone"] = None
+
+    level["rmt_result"] = None
+    crossing_attempt = find_crossing_attempt(
+        candles=candles,
+        slice_start=slice_start,
+        slice_end=slice_end,
+        first_move_end=first_move_end,
+        structural_level=structural_level,
+        choch_zone=choch_zone,
         global_trend=global_trend,
     )
-    level_dict["analysis"] = analysis
 
-    if not analysis["analysis_valid"]:
-        level_dict["termination_reason"] = "invalid_analysis"
-        return level_dict
+    level["crossing_attempt"] = crossing_attempt
+    level["choch_mitigated"] = crossing_attempt is not None
 
-    most_recent_attempt = analysis["most_recent_attempt"]
-    if most_recent_attempt is None:
-        level_dict["termination_reason"] = "no_attempt_found"
-        return level_dict
-
-    response_move = find_response_move(rmt_result, most_recent_attempt, global_trend)
-    level_dict["response_move"] = response_move
-
-    if response_move is None:
-        level_dict["termination_reason"] = "waiting_for_response_move"
-        return level_dict
+    if crossing_attempt is None:
+        level["termination_reason"] = "no_crossing_attempt"
+        return level
 
     if current_depth >= max_depth:
-        level_dict["termination_reason"] = "max_depth_reached"
-        return level_dict
+        level["termination_reason"] = "max_depth_reached"
+        return level
 
-    # Build child slice indices in global space.
-    # child_start_global is a global candle index — passed as global_offset to the
-    # recursive call so the child level can compute its own layer_start_index correctly.
-    child_start_global = global_offset + response_move["start_index"]
-    child_end_global = (
-        global_offset + response_move["end_index"]
-        if response_move["end_index"] is not None
-        else len(candles) - 1
-    )
-
-    if child_end_global - child_start_global < 9:  # < 10 candles
-        level_dict["termination_reason"] = "child_slice_too_small"
-        return level_dict
-
-    # Child leg indices are relative to the child slice by invariant.
-    child_len = child_end_global - child_start_global + 1
-    child_leg: Dict[str, Any] = {
-        "type": "retracement",
-        "start_index": 0,
-        "end_index": child_len - 1,
-        "start_price": response_move["start_price"],
-        "end_price": response_move["end_price"],
-        "confirmed": True,
-        "slope": None,
-    }
-
-    level_dict["child"] = _walk_level(
+    child = _walk_level(
         candles,
-        child_leg,
+        crossing_attempt["global_start_index"],
+        slice_end,
         global_trend,
         filter_config,
+        rmt_filter_config,
         current_depth + 1,
         max_depth,
-        child_start_global,
+        binance_symbol=binance_symbol,
+        known_first_move_end_index=crossing_attempt["global_end_index"],
+        known_first_move_end_price=crossing_attempt["end_price"],
     )
-    return level_dict
+    level["child"] = child
+    level["termination_reason"] = child["termination_reason"]
+    return level
 
 
-# Primary entry point. Takes the full candle list and the already-computed
-# identify_trend result (never recomputed here — passed in from the pipeline).
-# Finds the current retracement leg, initiates the recursive walk, and
-# returns the complete State Report.
-# max_depth: maximum recursion levels (default 4, configurable).
-# filter_config: the six identify_trend filter parameters as a dict.
 def walk_structure(
     candles: List[Any],
     result: Dict[str, Any],
     filter_config: Dict[str, Any],
     max_depth: int = 4,
+    rmt_filter_config: Optional[Dict[str, Any]] = None,
+    binance_symbol: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Recursive structural depth walk — primary entry point.
-
-    Args:
-        candles: Full candle list.
-        result: Dict from identify_trend (not recomputed here).
-        filter_config: The six identify_trend filter parameters as a dict.
-        max_depth: Maximum recursion depth (default 4).
-
-    Returns:
-        Complete State Report dict.
-    """
+    """Public entry point for recursive structural depth analysis."""
     global_trend = result.get("trend", "range")
 
     def _not_walkable(reason: str) -> Dict[str, Any]:
@@ -360,12 +469,10 @@ def walk_structure(
             "reason": reason,
             "global_trend": global_trend,
             "levels": [],
-            "max_depth_reached": 0,
             "total_mitigation_count": 0,
+            "max_depth_reached": 0,
             "deepest_termination_reason": reason,
             "active_level": 0,
-            "active_choch_zone": None,
-            "active_choch_proximity": None,
             "waiting_for": "Insufficient structure in current retracement",
             "stars_aligned": False,
         }
@@ -378,83 +485,84 @@ def walk_structure(
         for leg in result.get("legs", [])
         if leg.get("type") == "retracement" and leg.get("confirmed") is True
     ]
-
     if not confirmed_retracements:
         return _not_walkable("no_confirmed_retracement")
 
-    root_leg_global = confirmed_retracements[-1]
-    root_start = int(root_leg_global["start_index"])
-    root_end = int(root_leg_global["end_index"])
-    root_leg_relative = {
-        "type": "retracement",
-        "start_index": 0,
-        "end_index": root_end - root_start,
-        "start_price": root_leg_global["start_price"],
-        "end_price": root_leg_global["end_price"],
-        "confirmed": root_leg_global.get("confirmed", False),
-        "slope": root_leg_global.get("slope"),
-    }
+    retracement_leg = confirmed_retracements[-1]
+    slice_start = int(retracement_leg["start_index"])
+    slice_end = (
+        int(retracement_leg["end_index"])
+        if retracement_leg.get("end_index") is not None
+        else len(candles) - 1
+    )
 
-    root_level = _walk_level(
+    effective_rmt_config = rmt_filter_config if rmt_filter_config is not None else RMT_DEFAULT_FILTER_CONFIG
+
+    root = _walk_level(
         candles,
-        root_leg_relative,
+        slice_start,
+        slice_end,
         global_trend,
         filter_config,
+        effective_rmt_config,
         current_depth=1,
         max_depth=max_depth,
-        global_offset=root_start,
+        binance_symbol=binance_symbol,
     )
 
-    # Flatten the child chain into a levels list
     levels: List[Dict[str, Any]] = []
-    current = root_level
-    while current is not None:
-        levels.append(current)
-        current = current.get("child")
+    node = root
+    while node is not None:
+        levels.append(node)
+        node = node.get("child")
 
-    # Compute summary fields
-    max_depth_reached = max(
-        (
-            lvl["depth"]
-            for lvl in levels
-            if lvl.get("analysis") and lvl["analysis"].get("analysis_valid")
-        ),
-        default=0,
-    )
+    total_mitigation_count = sum(1 for level in levels if level.get("choch_mitigated") is True)
+    max_depth_reached = max((level["depth"] for level in levels), default=0)
+    deepest = levels[-1] if levels else {
+        "depth": 0,
+        "termination_reason": "unknown",
+        "structural_level": None,
+    }
+    deepest_reason = deepest.get("termination_reason", "unknown")
 
-    total_mitigation_count = sum(
-        lvl["analysis"].get("mitigation_count", 0)
-        for lvl in levels
-        if lvl.get("analysis") and lvl["analysis"].get("analysis_valid")
-    )
+    active_level = 0
+    for level in levels:
+        if level.get("crossing_attempt") is not None:
+            active_level = max(active_level, int(level["depth"]))
 
-    deepest_level = levels[-1] if levels else root_level
-    deepest_termination_reason = deepest_level.get("termination_reason") or "unknown"
-
-    active_level_index = 0
-    active_level_depth = 0
-    for i, lvl in enumerate(levels):
-        if lvl.get("analysis") and lvl["analysis"].get("analysis_valid"):
-            active_level_index = i
-            active_level_depth = lvl["depth"]
-
-    active_analysis = levels[active_level_index].get("analysis") if levels else None
-    active_choch_zone = active_analysis.get("rmt_choch_zone") if active_analysis else None
-    active_choch_proximity = active_analysis.get("rmt_choch_proximity") if active_analysis else None
-
-    waiting_for = _build_waiting_for(deepest_level)
+    if deepest_reason == "no_crossing_attempt":
+        bos = deepest.get("structural_level")
+        bos_price = f"{float(bos['price']):.2f}" if bos and bos.get("price") is not None else "unknown"
+        waiting_for = (
+            f"CHoCH at depth {deepest['depth']} has not been mitigated. "
+            f"Waiting for a trend from the CHoCH zone to cross the BOS at {bos_price}."
+        )
+    elif deepest_reason == "no_choch_zone":
+        waiting_for = (
+            f"Depth {deepest['depth']} retracement does not yet have enough internal "
+            "structure to identify a CHoCH zone."
+        )
+    elif deepest_reason == "no_structural_level":
+        waiting_for = (
+            f"Depth {deepest['depth']} retracement has no confirmed internal impulse "
+            "- no structural level to watch."
+        )
+    elif deepest_reason == "max_depth_reached":
+        waiting_for = f"Maximum depth {deepest['depth']} reached. Monitor CHoCH zone at depth {deepest['depth']}."
+    elif deepest_reason == "slice_too_small":
+        waiting_for = f"Crossing attempt at depth {deepest['depth']} is too short to analyze further."
+    else:
+        waiting_for = "Insufficient structure in current retracement"
 
     return {
         "walkable": True,
         "reason": None,
         "global_trend": global_trend,
         "levels": levels,
-        "max_depth_reached": max_depth_reached,
         "total_mitigation_count": total_mitigation_count,
-        "deepest_termination_reason": deepest_termination_reason,
-        "active_level": active_level_depth,
-        "active_choch_zone": active_choch_zone,
-        "active_choch_proximity": active_choch_proximity,
+        "max_depth_reached": max_depth_reached,
+        "deepest_termination_reason": deepest_reason,
+        "active_level": active_level,
         "waiting_for": waiting_for,
-        "stars_aligned": False,  # Set by Phase 4
+        "stars_aligned": False,
     }
