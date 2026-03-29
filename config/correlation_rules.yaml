@@ -1,0 +1,6 @@
+# Placeholder correlation rules for future multi-symbol risk control.
+# Keep this file in YAML format to allow non-code updates.
+rules:
+  - name: default_independent
+    description: Treat setups as independent until correlation logic is implemented.
+    enabled: true

@@ -1,0 +1,223 @@
+GLOBAL UI AUDIT
+Project: chronos-ai/frontend
+Date: 2026-03-26
+Scope read:
+- frontend/src/app/*/page.tsx
+- frontend/src/components/chronos-ui.tsx
+
+Notes:
+- This report records current state only. No source files were modified.
+- "Hardcoded hex values" below means direct hex literals used in page/component code rather than Tailwind semantic token classes.
+- Explicit per-page reporting scope requested: scanner, universe, signals, market, analytics, risk, command.
+- Additional page files read but not expanded below: deep-dive, radar, watchtower.
+
+PAGE: scanner
+Outermost parent background:
+- Inline style background: #0D0F14 on the root page div.
+Internal panels/cards/sections backgrounds:
+- Header bar: #0A0C10.
+- KPI strip wrapper: #080A0E.
+- KPI cards: #111318.
+- Controls row: no explicit background.
+- Table rows: no fixed background; hover overlay via class, pulse row overlay rgba(245,166,35,0.06).
+- Tooltip panel: bg-background-panel Tailwind token class.
+- Footer bar: #0A0C10.
+Font sizes below 11px:
+- PhaseSteps footer text: fontSize 9.
+- DirectionTag: fontSize 10.
+- PhaseBadge: fontSize 10.
+- TFBadge: fontSize 10.
+- StatCard label: fontSize 10.
+- StatCard subtext: fontSize 10.
+- Header label "MARKET SCANNER": fontSize 10.
+- Header version "v2.4": fontSize 10.
+- Header status "LIVE": fontSize 10.
+- Header UTC timestamp: fontSize 10.
+- Header scan button: fontSize 10.
+- Category buttons: fontSize 10.
+- Sort label: fontSize 10.
+- Sort buttons: fontSize 10.
+- Table header labels: fontSize 9.
+- Market category sublabel: fontSize 10.
+- Waiting preview line: fontSize 10.
+- Tooltip text: text-[10px].
+- Footer labels: fontSize 9.
+Hardcoded hex values:
+- #0D0F14, #0A0C10, #080A0E, #111318, #1C1E24, #2A2D36, #2A2E39, #3A3D48, #4A4D58, #4CAF7D, #6B6F7A, #C8C8D0, #C8851A, #E05A5A, #E8E8EC, #F5A623.
+
+PAGE: universe
+Outermost parent background:
+- Class bg-[#131722] on the root page div.
+Internal panels/cards/sections backgrounds:
+- Top KPI strip wrapper: inline background #080A0E.
+- Shared StatCard panels: bg-background-panel token, explicit border from shared primitive.
+- Heatmap cards: #1E222D.
+- Heatmap placeholders: #0A0C10.
+- Bottom distribution panels: #111318.
+- Phase mini-cards: bg-[#131722].
+- Distribution bar backgrounds: bg-[#131722].
+Font sizes below 11px:
+- Subtitle "MARKET BREADTH MATRIX": text-[10px].
+- Freshness label: text-[10px].
+- Heatmap section title: text-[10px].
+- Tile category label: text-[9px].
+- Category distribution title: text-[10px].
+- Category row labels/counts: text-[10px].
+- Phase distribution title: text-[10px].
+- Phase mini-card labels IMPULSE/SCANNING: text-[9px].
+- Monitoring summary text: text-[10px].
+Hardcoded hex values:
+- #080A0E, #0A0C10, #111318, #131722, #1C1E24, #1E222D, #2A2E39, #4CAF7D, #787B86, #D1D4DC, #E05A5A, #F23645, #F5A623.
+
+PAGE: signals
+Outermost parent background:
+- Inline style background: #0D0F14 on the root page div.
+Internal panels/cards/sections backgrounds:
+- KPI strip wrapper: #080A0E.
+- Shared StatCard panels: bg-background-panel token.
+- Capacity panel: #1E222D.
+- Capacity bar track: #1C1E24.
+- Table container: #1E222D.
+- Sticky table header: #1E222D.
+- Broker chip and drop button surfaces: #2A2E39.
+- FSM state badges: #1C1E24 for non-monitoring states; amber rgba for MONITORING.
+Font sizes below 11px:
+- Subtitle "FSM SURVEILLANCE MATRIX": fontSize 10.
+- Freshness label: fontSize 10.
+- Rows count label: fontSize 10.
+- Capacity caption: fontSize 10.
+- Table column headers: fontSize 9.
+- Broker chip: fontSize 10.
+- FSM badge text: fontSize 10.
+- Drop button: fontSize 10.
+Hardcoded hex values:
+- #080A0E, #0D0F14, #1C1E24, #1E222D, #2A2E39, #787B86, #089981, #C8C8D0, #D1D4DC, #E05A5A, #F5A623.
+
+PAGE: market
+Outermost parent background:
+- Inline style background: #131722 on the root page div.
+Internal panels/cards/sections backgrounds:
+- Top toolbar wrapper: no explicit background on outer bar, but controls use bg-[#131722].
+- Main chart area: inherits page background; loading skeleton uses bg-background-surface token.
+- Right sidebar shell (MarketSidebar): #1E222D.
+- Sidebar top summary strip: #0A0C10.
+- Sidebar footer inject action bar: #0A0C10.
+- Bottom trend progression tray: #0A0C10.
+- Select controls: bg-[#131722].
+- Error panel: custom dark gradient from rgba values, not token classes.
+Font sizes below 11px:
+- Sidebar label DIRECTION: fontSize 9.
+- Sidebar label MTF ALIGNMENT: fontSize 9.
+- MTF badge text inside sidebar: fontSize 9.
+- Sidebar label CONVICTION: fontSize 9.
+- Sidebar conviction secondary text: fontSize 9.
+- Sidebar tab buttons: text-[9px].
+- Inject button: fontSize 10.
+- Error panel eyebrow "Connection Fault": fontSize 10.
+- Error panel retry button: fontSize 10.
+- Top toolbar back link: text-[10px].
+- Symbol select: text-[10px].
+- Timeframe select: text-[10px].
+- Timeframe buttons: text-[9px].
+- Live/Sync label: text-[10px].
+- Sidebar section titles MARKET STATS / ZONE INFO / TREND STATE / STREAM: text-[10px].
+- Bottom progression heading: text-[9px].
+- Bottom progression legend labels: text-[9px].
+- Bottom progression step labels: text-[9px].
+- Additional current-phase labels in the upper sidebar/trend strip: fontSize 9 or 10 where inline labels are used.
+Hardcoded hex values:
+- #0A0C10, #1C1E24, #1E222D, #2962FF, #3A3D48, #4A4D58, #4CAF7D, #6B8FFF, #787B86, #7E4D46, #9D2B6B, #C8851A, #D1D4DC, #D9B4AC, #E05A5A, #F23645, #F5A623, #FF8C73, #131722.
+
+PAGE: analytics
+Outermost parent background:
+- Inline style background: #0D0F14 on the root page div.
+Internal panels/cards/sections backgrounds:
+- Demo banner: rgba(245,166,35,0.08) overlay with rgba border.
+- Header bar: #0A0C10.
+- KPI strip wrapper: #080A0E.
+- Shared StatCard panels: bg-background-panel token.
+- Tab row: #0A0C10.
+- Overview cards/panels: #111318.
+- Phase mini-panels in overview: #0D0F14.
+- BY SCORE / BY CLASS / TRADE LOG panels: #111318.
+- Trade log row dividers use #111318.
+Font sizes below 11px:
+- Local Label helper: fontSize 9 throughout page.
+- Trade log date: fontSize 9.
+- Trade log category: fontSize 9.
+- Trade log direction: fontSize 10.
+- Trade log entry type: fontSize 9.
+- Trade log timeframe: fontSize 9.
+- Trade log score: fontSize 10.
+- Trade log RR: fontSize 10.
+- Demo banner: fontSize 10.
+- Header label "TRADE ANALYTICS": fontSize 10.
+- Filter buttons: fontSize 9.
+- Tab buttons: fontSize 9.
+Hardcoded hex values:
+- #080A0E, #0A0C10, #0D0F14, #111318, #1C1E24, #2A2D36, #3A3D48, #4A4D58, #4CAF7D, #6B6F7A, #6B8FFF, #C8851A, #C8C8D0, #D1D4DC, #E05A5A, #E8E8EC, #F5A623, #FFD166.
+
+PAGE: risk
+Outermost parent background:
+- Inline style background: #0D0F14 on the root page div.
+Internal panels/cards/sections backgrounds:
+- Demo banner: rgba(245,166,35,0.08) overlay with rgba border.
+- Section cards/panels: #111318.
+- Exposure bar tracks: #1C1E24.
+- Edit button background: transparent.
+- Save button background: #F5A623.
+Font sizes below 11px:
+- Drawdown gauge sublabel CURRENT DD: fontSize 10.
+- Drawdown max limit label: fontSize 10.
+- Exposure panel title: fontSize 10.
+- Session P&L TODAY label: fontSize 9.
+- THIS WEEK label: fontSize 9.
+- THIS MONTH label: fontSize 9.
+- RiskField label: fontSize 9.
+- RiskField EDIT button: fontSize 9.
+- Demo banner: fontSize 10.
+- Section labels DRAWDOWN GAUGE / SESSION P&L / RISK PARAMETERS: fontSize 10.
+- Save Parameters button: fontSize 10.
+Hardcoded hex values:
+- #0D0F14, #111318, #1C1E24, #2A2E39, #3A3D48, #4CAF7D, #6B6F7A, #C8851A, #C8C8D0, #E05A5A, #E8E8EC, #F5A623.
+
+PAGE: command
+Outermost parent background:
+- Class bg-[#131722] on the root page div.
+Internal panels/cards/sections backgrounds:
+- Main console shell: bg-[#1E222D].
+- Inputs/selects: bg-[#0B0E14].
+- Status panel: bg-[#0B0E14].
+- Override table wrapper: bg-[#131722].
+- Primary action button: bg-[#2A2E39] with hover bg-[#F5A623].
+Font sizes below 11px:
+- Form labels Symbol / Zone Type / Price High / Price Low: text-[9px].
+- Current Overrides heading: text-[10px].
+- Table headers Symbol / Type / High / Low: text-[9px].
+Hardcoded hex values:
+- #0B0E14, #131722, #1E222D, #2A2E39, #787B86, #D1D4DC, #F23645, #F5A623.
+
+SHARED COMPONENT: chronos-ui.tsx
+Purpose snapshot:
+- Shared primitive file defining reusable terminal tokens/components used by multiple pages.
+Background-related surfaces:
+- Token object C includes bg1 #0D0F14, bg2 #111318, bg3 #1C1E24.
+- tokenBgColorClasses maps hardcoded hex to semantic classes for #111318, #1C1E24, #F5A623, #C8851A, #5C4A1E, #E05A5A.
+- StatCard uses bg-background-panel with explicit border-[#1C1E24].
+- EquityCurve tooltip uses bg-[#10141dcc].
+Font sizes below 11px:
+- Label component: text-[9px].
+- TFBadge: text-[10px].
+- DirectionTag: text-[10px].
+- PhaseBadge: text-[10px].
+- StatCard label: text-[10px].
+- StatCard subtext: text-[10px].
+- EquityCurveTooltip title: text-[9px].
+- EquityCurveTooltip secondary row: text-[10px].
+- Recharts X axis tick: fontSize 10.
+- Recharts Y axis tick: fontSize 9.
+Hardcoded hex values:
+- Core palette constants: #0D0F14, #111318, #1C1E24, #2A2E39, #3A3D48, #3A6BFF, #4CAF7D, #5C4A1E, #6B6F7A, #C8851A, #C8C8D0, #E05A5A, #E8E8EC, #F5A623.
+- Additional direct literals in shared UI: #10141dcc.
+
+END OF REPORT

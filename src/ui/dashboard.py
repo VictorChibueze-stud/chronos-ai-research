@@ -127,7 +127,7 @@ def build_zone_map_figure(
 def _render_command_center() -> None:
     with SessionLocal() as db:
         setups = get_all_setups(db)
-        st.title("Chronos-AI Command Center")
+        st.title("Ikenga Command Center")
         if setups.empty:
             st.info("No monitored setups found in the local database.")
             return
@@ -202,7 +202,7 @@ def _render_deep_dive() -> None:
 
 
 def run_dashboard() -> None:
-    st.set_page_config(page_title="Chronos-AI Command Center", layout="wide")
+    st.set_page_config(page_title="Ikenga Command Center", layout="wide")
     page = st.sidebar.radio("View", ["Command Center", "Deep Dive"])
     if page == "Command Center":
         _render_command_center()

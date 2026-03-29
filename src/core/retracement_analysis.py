@@ -1,4 +1,4 @@
-"""Retracement Mini-Trend (RMT) analysis for Chronos-AI.
+"""Retracement Mini-Trend (RMT) analysis for Ikenga.
 
 Pure stateless module. No side effects. No file I/O.
 """

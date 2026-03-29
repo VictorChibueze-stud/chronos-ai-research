@@ -1,4 +1,4 @@
-"""Core feature engine for Chronos-AI (Phase 1).
+"""Core feature engine for Ikenga (Phase 1).
 
 Pure, deterministic functions that compute indicators and simple structure
 features from OHLC candle data. This module is broker-agnostic and side-effect

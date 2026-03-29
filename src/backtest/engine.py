@@ -1,4 +1,4 @@
-"""Single-symbol backtest engine for Chronos-AI.
+"""Single-symbol backtest engine for Ikenga.
 
 This engine runs a deterministic, discrete-bar backtest using a pluggable
 `StrategyFn`. It supports one open position at a time and computes simple

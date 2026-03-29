@@ -1,4 +1,4 @@
-# Chronos-AI
+# Ikenga
 
 > A personal side project — rebuilding and systematising a manual trading strategy I ran a few years ago.
 

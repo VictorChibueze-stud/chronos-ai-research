@@ -1,4 +1,4 @@
-"""Standalone trend chart visualization for Chronos-AI.
+"""Standalone trend chart visualization for Ikenga.
 
 This module contains the draw_trend_chart function extracted from notebook 08.
 Pure visualization layer — no business logic.

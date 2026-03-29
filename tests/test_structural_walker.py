@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Tuple
 
 import src.core.structural_walker as walker_module
 from src.core.features import Candle
-from src.core.structural_walker import find_crossing_attempt, walk_structure
+from src.core.structural_walker import find_crossing_attempt, serialize_state_report, walk_structure
 from src.core.trend_id import identify_trend
 
 
@@ -438,3 +438,25 @@ def test_find_crossing_attempt_returns_first_crossing():
     assert attempt["global_start_index"] == 6
     assert attempt["end_price"] == candles[9].high
     assert attempt["start_price"] == candles[6].low
+
+
+# ---------------------------------------------------------------------------
+# serialize_state_report
+# ---------------------------------------------------------------------------
+
+
+def test_serialize_state_report_is_json_serializable():
+    """Serialized state report must be json.dumps compatible."""
+    import json
+    candles, result = _make_downtrend_with_retracement()
+    state = walk_structure(candles, result, _default_filter_config())
+    serialized = serialize_state_report(state)
+    # Must not raise
+    json_str = json.dumps(serialized)
+    assert isinstance(json_str, str)
+    assert len(json_str) > 10
+    # first_move_candles must be stripped
+    for level in serialized.get("levels", []):
+        assert "first_move_candles" not in level
+        assert "internal_result" not in level
+        assert "rmt_result" not in level

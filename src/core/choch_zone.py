@@ -1,4 +1,4 @@
-"""CHoCH (Change of Character) zone computation for Chronos-AI.
+"""CHoCH (Change of Character) zone computation for Ikenga.
 
 Pure, stateless module. No side effects. No file I/O.
 """

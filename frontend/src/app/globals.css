@@ -1,0 +1,149 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import "tailwindcss";
+
+:root {
+  --bg-base: #0B0D11;
+  --bg-surface: #131722;
+  --bg-elevated: #1E222D;
+  --bg-hover: #252A36;
+  --border-subtle: #1E222D;
+  --border-default: #2A2E39;
+  --border-strong: #363A45;
+  --text-primary: #D1D4DC;
+  --text-secondary: #787B86;
+  --text-dim: #434651;
+  --bull: #26A69A;
+  --bear: #EF5350;
+  --amber: #F5A623;
+  --amber-dim: rgba(245,166,35,0.15);
+  --blue: #2962FF;
+  --purple: #7B1FA2;
+}
+
+html {
+  font-size: 15px;
+}
+
+html, body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: "IBM Plex Mono", monospace;
+}
+
+body {
+  margin: 0;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--bg-base);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--bg-elevated);
+  border-radius: 9999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+@keyframes scanner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes score-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(245, 166, 35, 0.4);
+  }
+  50% {
+    opacity: 0.8;
+    box-shadow: 0 0 0 4px rgba(245, 166, 35, 0);
+  }
+}
+
+@keyframes border-pulse-amber {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px rgba(245, 166, 35, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(245, 166, 35, 0.5), 0 0 8px rgba(245, 166, 35, 0.15);
+  }
+}
+
+@keyframes border-pulse-blue {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px rgba(58, 107, 255, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(58, 107, 255, 0.5), 0 0 8px rgba(58, 107, 255, 0.15);
+  }
+}
+
+@keyframes value-flash {
+  0% {
+    opacity: 1;
+  }
+  15% {
+    opacity: 0.4;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+@keyframes tick-up {
+  0% { color: #26A69A; }
+  100% { color: var(--text-primary); }
+}
+
+@keyframes tick-down {
+  0% { color: #EF5350; }
+  100% { color: var(--text-primary); }
+}
+
+@keyframes row-highlight {
+  0% { background: rgba(245,166,35,0.08); }
+  100% { background: transparent; }
+}
+
+@keyframes logo-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes tf-loading {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.scanner-row:hover {
+  background: var(--bg-hover);
+}
+
+.signal-row:hover {
+  background: var(--bg-hover);
+}

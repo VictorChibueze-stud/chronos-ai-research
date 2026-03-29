@@ -1,4 +1,4 @@
-# Chronos-AI Developer Guide (Skeleton)
+# Ikenga Developer Guide (Skeleton)
 
 ## 1. Setup
 

@@ -1,4 +1,4 @@
-"""Recursive structural depth walker for Chronos-AI.
+"""Recursive structural depth walker for Ikenga.
 
 Depth model:
 - A new depth level is created only when a trend that started from the prior
@@ -473,7 +473,7 @@ def walk_structure(
             "max_depth_reached": 0,
             "deepest_termination_reason": reason,
             "active_level": 0,
-            "waiting_for": "Insufficient structure in current retracement",
+            "waiting_for": "Waiting for price to reach global CHoCH zone",
             "stars_aligned": False,
         }
 
@@ -531,28 +531,23 @@ def walk_structure(
             active_level = max(active_level, int(level["depth"]))
 
     if deepest_reason == "no_crossing_attempt":
-        bos = deepest.get("structural_level")
-        bos_price = f"{float(bos['price']):.2f}" if bos and bos.get("price") is not None else "unknown"
-        waiting_for = (
-            f"CHoCH at depth {deepest['depth']} has not been mitigated. "
-            f"Waiting for a trend from the CHoCH zone to cross the BOS at {bos_price}."
-        )
+        waiting_for = "Price has not yet reached the CHoCH zone — monitoring"
     elif deepest_reason == "no_choch_zone":
-        waiting_for = (
-            f"Depth {deepest['depth']} retracement does not yet have enough internal "
-            "structure to identify a CHoCH zone."
-        )
+        waiting_for = f"Waiting for price to reach depth {deepest['depth']} CHoCH zone"
     elif deepest_reason == "no_structural_level":
         waiting_for = (
-            f"Depth {deepest['depth']} retracement has no confirmed internal impulse "
-            "- no structural level to watch."
+            f"Depth {deepest['depth']} CHoCH zone active — watching for entry impulse"
         )
     elif deepest_reason == "max_depth_reached":
-        waiting_for = f"Maximum depth {deepest['depth']} reached. Monitor CHoCH zone at depth {deepest['depth']}."
+        waiting_for = (
+            f"All depth levels confirmed — watching for entry signal at depth {deepest['depth']} CHoCH zone"
+        )
     elif deepest_reason == "slice_too_small":
-        waiting_for = f"Crossing attempt at depth {deepest['depth']} is too short to analyze further."
+        bos = deepest.get("structural_level")
+        bos_price = f"{float(bos['price']):.2f}" if bos and bos.get("price") is not None else "unknown"
+        waiting_for = f"Price inside CHoCH zone — watching for BOS break at {bos_price}"
     else:
-        waiting_for = "Insufficient structure in current retracement"
+        waiting_for = "Waiting for price to reach global CHoCH zone"
 
     return {
         "walkable": True,
@@ -566,3 +561,80 @@ def walk_structure(
         "waiting_for": waiting_for,
         "stars_aligned": False,
     }
+
+
+def serialize_state_report(state_report: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip non-serializable objects from walk_structure output.
+
+    Removes first_move_candles, internal_result, and rmt_result from each
+    level. Converts datetime objects to ISO format strings. Returns a clean
+    dict safe for json.dumps() and database storage.
+
+    The Orchestrator must always call this before writing to the database.
+    The raw state_report with Candle objects stays in memory for notebook use only.
+    """
+    import copy
+    from datetime import datetime
+
+    # Fields to remove from each depth level before serialization.
+    # These contain Candle objects or large intermediate results
+    # not needed by the Orchestrator.
+    LEVEL_FIELDS_TO_STRIP = {
+        "first_move_candles",  # list of Candle objects
+        "internal_result",     # large intermediate identify_trend result
+        "rmt_result",          # large intermediate identify_trend result
+        "internal_tf_slice_timestamps",  # list of datetime objects
+    }
+
+    def _strip_level(lvl: Dict[str, Any]) -> None:
+        """Recursively strip non-serializable fields from a level and its child chain."""
+        for field in LEVEL_FIELDS_TO_STRIP:
+            lvl.pop(field, None)
+        child = lvl.get("child")
+        if child is not None:
+            _strip_level(child)
+
+    def _convert_value(v: Any) -> Any:
+        if isinstance(v, datetime):
+            return v.isoformat()
+        if isinstance(v, dict):
+            return {k: _convert_value(val) for k, val in v.items()}
+        if isinstance(v, list):
+            return [_convert_value(item) for item in v]
+        return v
+
+    serialized = copy.deepcopy(state_report)
+
+    # Pass 1: strip non-serializable fields from all levels and their child chains.
+    # Must run before _convert_value so the child dicts are free of Candle objects
+    # before _convert_value recurses into them.
+    for level in serialized.get("levels", []):
+        _strip_level(level)
+
+    # Pass 2: convert any remaining datetime objects recursively
+    for level in serialized.get("levels", []):
+        for key in list(level.keys()):
+            level[key] = _convert_value(level[key])
+
+    # Convert top-level fields
+    for key in list(serialized.keys()):
+        if key != "levels":
+            serialized[key] = _convert_value(serialized[key])
+
+    levels = serialized.get("levels", [])
+    global_choch_zone = None
+    if levels:
+        first_level = levels[0]
+        first_level_choch_zone = first_level.get("choch_zone")
+        if isinstance(first_level_choch_zone, dict):
+            lower_boundary = first_level_choch_zone.get("lower_boundary")
+            upper_boundary = first_level_choch_zone.get("upper_boundary")
+            if lower_boundary is not None and upper_boundary is not None:
+                global_choch_zone = {
+                    "lower_boundary": float(lower_boundary),
+                    "upper_boundary": float(upper_boundary),
+                }
+
+    serialized["global_choch_zone"] = global_choch_zone
+
+    return serialized

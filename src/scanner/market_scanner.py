@@ -3,35 +3,48 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence, Tuple
 
 import pandas as pd
 import requests
 import yaml
 
+from src.adapters.binance_data import fetch_binance_ohlc_sync
+from src.adapters.deriv_data import fetch_deriv_ohlc_sync, get_active_deriv_symbols
 from src.core.leg_metrics import annotate_legs_with_metrics, summarise_leg_metrics
 from src.core.retracement_depth import annotate_legs_with_depth, summarise_retracement_depths
 from src.core.structure_levels import compute_all_structure_levels, compute_internal_structure_levels
 from src.core.trend_id import compute_internal_structure, identify_trend
-from src.data.candle_store import (
-    candles_df_to_candle_list,
-    estimate_fetch_time,
-    fetch_and_store_all_intervals,
-)
+from src.scanner.universe import compute_correlation_groups
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Hardcoded Deriv universe — always included in every scan regardless of what
+# the active_symbols API returns.
+# ---------------------------------------------------------------------------
+DERIV_FOREX_SYMBOLS = [
+    "frxEURUSD", "frxGBPUSD", "frxUSDJPY", "frxUSDCHF",
+    "frxAUDUSD", "frxUSDCAD", "frxNZDUSD", "frxEURGBP",
+    "frxEURJPY", "frxGBPJPY",
+]
+
+DERIV_COMMODITY_SYMBOLS = [
+    "frxXAUUSD", "frxXAGUSD", "frxOILUSD",
+]
+
+DERIV_INDICES_SYMBOLS = [
+    "OTC_DJI", "OTC_NDX", "OTC_SPX", "OTC_FTSE",
+    "OTC_DAX", "OTC_N225",
+]
 
 _BINANCE_24H_TICKER_URL = "https://api.binance.com/api/v3/ticker/24hr"
 _STABLE_BASE_ASSETS = {"USDC", "BUSD", "TUSD", "USDP", "DAI", "FDUSD"}
-
-# Load timeframe config for lookback-based candle filtering.
-_TF_CFG_PATH = Path(__file__).parent.parent.parent / "config" / "timeframe_windows.yaml"
-try:
-    with open(_TF_CFG_PATH) as _f:
-        _TF_CFG = yaml.safe_load(_f)["timeframes"]
-except Exception:
-    _TF_CFG = {}
+_SYMBOLS_CFG_PATH = Path(__file__).parent.parent.parent / "config" / "symbols.yaml"
 
 RESULT_FIELDS = [
     "symbol",
@@ -192,6 +205,42 @@ def run_pipeline(
         return _build_error_result(symbol, interval, str(exc))
 
 
+def _load_symbols_config() -> Dict[str, Any]:
+    """Load symbol universe config from config/symbols.yaml."""
+    try:
+        with open(_SYMBOLS_CFG_PATH, encoding="utf-8") as fh:
+            return yaml.safe_load(fh) or {}
+    except Exception as exc:
+        logger.warning("Failed to read symbols config %s: %s", _SYMBOLS_CFG_PATH, exc)
+        return {}
+
+
+def _section_values(section: Any) -> List[str]:
+    """Normalize symbol section formats into a flat list of codes."""
+    if isinstance(section, dict):
+        return [str(v) for v in section.values()]
+    if isinstance(section, list):
+        return [str(v) for v in section]
+    return []
+
+
+def _build_symbol_groups(symbols: Sequence[str]) -> Tuple[List[str], List[str]]:
+    """Split selected symbols into binance and deriv groups using symbols.yaml."""
+    cfg = _load_symbols_config()
+    configured_binance = set(_section_values(cfg.get("binance", {})))
+    configured_deriv = set(_section_values(cfg.get("deriv", {})))
+
+    if symbols:
+        requested = set(symbols)
+        binance_symbols = sorted(requested & configured_binance)
+        deriv_symbols = sorted(requested & configured_deriv)
+    else:
+        binance_symbols = sorted(configured_binance)
+        deriv_symbols = sorted(configured_deriv)
+
+    return binance_symbols, deriv_symbols
+
+
 def run_scanner(
     symbols: List[str],
     intervals: List[str],
@@ -199,96 +248,107 @@ def run_scanner(
     force_full: bool = False,
 ) -> pd.DataFrame:
     """Run scanner over symbols/intervals and persist results + metadata."""
-    estimate = estimate_fetch_time(symbols, intervals)
-    print("Fetch estimate:")
-    print(json.dumps(estimate, indent=2))
+    _ = force_full  # Preserved API; native adapter fetches are always full lookback.
 
-    total_combinations = len(symbols) * len(intervals)
-    print(
-        f"Starting scan: {len(symbols)} symbols × {len(intervals)} timeframes = "
-        f"{total_combinations} combinations."
+    # Hybrid model: Binance symbols are dynamic (function input),
+    # Deriv symbols are static (from config/symbols.yaml).
+    binance_symbols = list(symbols)
+    cfg = _load_symbols_config()
+    deriv_symbols = sorted(
+        set(_section_values(cfg.get("deriv", {})))
+        | set(DERIV_FOREX_SYMBOLS)
+        | set(DERIV_COMMODITY_SYMBOLS)
+        | set(DERIV_INDICES_SYMBOLS)
     )
+
+    total_combinations = (len(binance_symbols) + len(deriv_symbols)) * len(intervals)
+    print(
+        f"Starting scan: {len(binance_symbols)} binance + {len(deriv_symbols)} deriv "
+        f"symbols × {len(intervals)} timeframes = {total_combinations} combinations."
+    )
+
+    # Deriv validation gate: call active symbol lookup once, drop missing symbols.
+    validated_deriv_symbols = list(deriv_symbols)
+    if deriv_symbols:
+        active_deriv = set(get_active_deriv_symbols())
+        missing = sorted(set(deriv_symbols) - active_deriv)
+        for symbol in missing:
+            logger.warning("Deriv symbol '%s' not active; dropping from fetch queue.", symbol)
+        validated_deriv_symbols = sorted(set(deriv_symbols) & active_deriv)
 
     scan_start = time.perf_counter()
     rows: List[Dict[str, Any]] = []
+    symbol_candle_map: Dict[Tuple[str, str], List[Any]] = {}
+    fetch_errors: Dict[Tuple[str, str], str] = {}
 
-    for symbol in symbols:
-        symbol_start = time.perf_counter()
-        try:
-            interval_frames = fetch_and_store_all_intervals(
-                symbol,
-                intervals,
-                force_full=force_full,
-            )
-        except Exception as exc:
-            message = f"fetch_and_store_all_intervals failed: {exc}"
-            for interval in intervals:
-                error_row = _build_error_result(symbol, interval, message)
-                rows.append(error_row)
-                print(f"[{symbol}] {interval}: ERROR — {message}")
-            continue
-
+    # Fetch loop: Binance symbols use Binance adapter.
+    for symbol in binance_symbols:
         for interval in intervals:
-            combo_start = time.perf_counter()
             try:
-                frame = interval_frames.get(interval)
-                if frame is None:
-                    raise ValueError(f"missing candle frame for interval={interval}")
-
-                candles = candles_df_to_candle_list(frame)
-
-                # Apply lookback filter to avoid pipeline running on stale data.
-                if interval in _TF_CFG and len(candles) > 0:
-                    lookback_days = _TF_CFG[interval]["lookback_days"]
-                    cutoff = candles[-1].timestamp - timedelta(days=lookback_days)
-                    candles = [c for c in candles if c.timestamp >= cutoff]
-                    if len(candles) < 50:
-                        print(
-                            f"[{symbol}] {interval}: SKIP — only {len(candles)} candles "
-                            f"after lookback filter"
-                        )
-                        continue
-
-                row = run_pipeline(
-                    symbol,
-                    interval,
-                    candles,
-                    use_parent_relative_filter=bool(
-                        filter_config.get("use_parent_relative_filter", False)
-                    ),
-                    min_impulse_parent_ratio=float(
-                        filter_config.get("min_impulse_parent_ratio", 0.15)
-                    ),
-                    use_momentum_filter=bool(filter_config.get("use_momentum_filter", False)),
-                    min_momentum_ratio=float(filter_config.get("min_momentum_ratio", 0.3)),
-                    use_dominance_filter=bool(filter_config.get("use_dominance_filter", False)),
-                    min_dominance_ratio=float(filter_config.get("min_dominance_ratio", 1.2)),
-                )
+                candles = fetch_binance_ohlc_sync(symbol, interval)
+                if candles:
+                    symbol_candle_map[(symbol, interval)] = candles
+                else:
+                    fetch_errors[(symbol, interval)] = "empty candle list"
             except Exception as exc:
-                row = _build_error_result(symbol, interval, str(exc))
+                fetch_errors[(symbol, interval)] = str(exc)
 
-            rows.append(row)
-            elapsed = time.perf_counter() - combo_start
+    # Fetch loop: validated Deriv symbols use Deriv adapter.
+    for symbol in validated_deriv_symbols:
+        for interval in intervals:
+            try:
+                candles = fetch_deriv_ohlc_sync(symbol, interval)
+                if candles:
+                    symbol_candle_map[(symbol, interval)] = candles
+                else:
+                    fetch_errors[(symbol, interval)] = "empty candle list"
+            except Exception as exc:
+                fetch_errors[(symbol, interval)] = str(exc)
 
-            if row["error"] is None:
-                print(
-                    f"[{symbol}] {interval}: trend={row['trend']} | "
-                    f"phase={row['current_phase']} | legs={row['confirmed_leg_count']} | "
-                    f"{elapsed:.1f}s"
-                )
-            else:
-                print(f"[{symbol}] {interval}: ERROR — {row['error']}")
+    # Core analysis loop over fetched candles.
+    for (symbol, interval), candles in symbol_candle_map.items():
+        combo_start = time.perf_counter()
+        row = run_pipeline(
+            symbol,
+            interval,
+            candles,
+            use_parent_relative_filter=bool(
+                filter_config.get("use_parent_relative_filter", False)
+            ),
+            min_impulse_parent_ratio=float(
+                filter_config.get("min_impulse_parent_ratio", 0.15)
+            ),
+            use_momentum_filter=bool(filter_config.get("use_momentum_filter", False)),
+            min_momentum_ratio=float(filter_config.get("min_momentum_ratio", 0.3)),
+            use_dominance_filter=bool(filter_config.get("use_dominance_filter", False)),
+            min_dominance_ratio=float(filter_config.get("min_dominance_ratio", 1.2)),
+        )
+        rows.append(row)
 
-        symbol_elapsed = time.perf_counter() - symbol_start
-        print(f"[{symbol}] done in {symbol_elapsed:.1f}s")
+        elapsed = time.perf_counter() - combo_start
+        if row["error"] is None:
+            print(
+                f"[{symbol}] {interval}: trend={row['trend']} | "
+                f"phase={row['current_phase']} | legs={row['confirmed_leg_count']} | "
+                f"{elapsed:.1f}s"
+            )
+        else:
+            print(f"[{symbol}] {interval}: ERROR — {row['error']}")
+
+    # Add explicit error rows for combinations that failed during fetch.
+    for (symbol, interval), message in fetch_errors.items():
+        rows.append(_build_error_result(symbol, interval, message))
 
     results_df = pd.DataFrame(rows, columns=RESULT_FIELDS)
 
-    total_time_seconds = time.perf_counter() - scan_start
-    successful = int((results_df["error"].isna()).sum()) if not results_df.empty else 0
-    failed = int((results_df["error"].notna()).sum()) if not results_df.empty else 0
+    # Correlation filter: applied to final scanner results prior to return.
+    final_df = compute_correlation_groups(results_df, symbol_candle_map)
 
-    successful_df = results_df[results_df["error"].isna()] if not results_df.empty else results_df
+    total_time_seconds = time.perf_counter() - scan_start
+    successful = int((final_df["error"].isna()).sum()) if not final_df.empty else 0
+    failed = int((final_df["error"].notna()).sum()) if not final_df.empty else 0
+
+    successful_df = final_df[final_df["error"].isna()] if not final_df.empty else final_df
     trending_count = int(successful_df["trend"].isin(["up", "down"]).sum()) if not successful_df.empty else 0
     ranging_count = int((successful_df["trend"] == "range").sum()) if not successful_df.empty else 0
 
@@ -314,10 +374,10 @@ def run_scanner(
     meta_path = output_dir / "scan_meta.json"
 
     try:
-        results_df.to_parquet(parquet_path, index=False)
+        final_df.to_parquet(parquet_path, index=False)
     except Exception as exc:
         fallback_csv = output_dir / "results.csv"
-        results_df.to_csv(fallback_csv, index=False)
+        final_df.to_csv(fallback_csv, index=False)
         print(
             f"[WARN] Failed to write parquet at {parquet_path}: {exc}. "
             f"Wrote CSV fallback to {fallback_csv}."
@@ -336,4 +396,4 @@ def run_scanner(
     with open(meta_path, "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=2)
 
-    return results_df
+    return final_df

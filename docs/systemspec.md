@@ -1,8 +1,8 @@
-# Chronos-AI System Specification – Trend-Following Research Lab
+# Ikenga System Specification – Trend-Following Research Lab
 
 ## 1. Purpose and Scope
 
-Chronos-AI is a research-oriented project to design, test, and iteratively refine systematic trading strategies with a strong focus on:
+Ikenga is a research-oriented project to design, test, and iteratively refine systematic trading strategies with a strong focus on:
 
 - Trend-following and pullback entries.
 - Multi-timeframe analysis (e.g., 1D, 4H, 1H, 15M, 5M).
@@ -17,7 +17,7 @@ Non-goals:
 
 ## 2. High-Level Architecture
 
-Chronos-AI is structured into the following logical components:
+Ikenga is structured into the following logical components:
 
 1. **Data Adapters (`src/adapters/`)**
    - Responsibility: Fetch OHLCV candles from external sources (e.g., Deriv WebSocket, CSV files).

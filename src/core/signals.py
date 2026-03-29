@@ -1,4 +1,4 @@
-"""Signal and strategy interface definitions for Chronos-AI backtests.
+"""Signal and strategy interface definitions for Ikenga backtests.
 
 This module defines simple, serializable dataclasses and a protocol that
 strategies should implement when used with the backtest engine.

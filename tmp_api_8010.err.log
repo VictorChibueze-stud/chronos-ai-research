@@ -1,0 +1,9 @@
+INFO:     Started server process [13104]
+INFO:     Waiting for application startup.
+Alert watcher started
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8010 (Press CTRL+C to quit)
+Alert watcher cycle complete: checked 1 setups
+Hydrating Deriv active symbols cache
+Failed to fetch Deriv active symbols: Connection timed out
+Deriv history for 'R_100' 1m is shallower than expected: got 331 candles, expected ~2160 (lookback_days=1.5). Returning available candles.

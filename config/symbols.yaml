@@ -1,15 +1,114 @@
 # Mapping of human-readable names to broker-specific symbol codes.
-# Initial focus: Deriv synthetic indices.
+# Phase 4: Multi-asset expansion with Forex, Commodities, and expanded Synthetics.
 
 deriv:
+  # Volatility Indices
   Volatility 10 Index: "R_10"
   Volatility 25 Index: "R_25"
   Volatility 50 Index: "R_50"
   Volatility 75 Index: "R_75"
   Volatility 100 Index: "R_100"
+  Volatility 10 Index (1s): "1HZ10V"
+  Volatility 25 Index (1s): "1HZ25V"
+  Volatility 50 Index (1s): "1HZ50V"
+  Volatility 75 Index (1s): "1HZ75V"
+  Volatility 100 Index (1s): "1HZ100V"
+
+  # Boom Indices
   Boom 300 Index: "BOOM300"
   Boom 500 Index: "BOOM500"
   Boom 1000 Index: "BOOM1000"
+
+  # Crash Indices
   Crash 300 Index: "CRASH300"
   Crash 500 Index: "CRASH500"
   Crash 1000 Index: "CRASH1000"
+
+  # Step Index
+  Step Index: "STEPINDEX"
+
+  # Forex Pairs (Major)
+  EUR/USD: "frxEURUSD"
+  GBP/USD: "frxGBPUSD"
+  USD/JPY: "frxUSDJPY"
+  USD/CHF: "frxUSDCHF"
+  AUD/USD: "frxAUDUSD"
+  USD/CAD: "frxUSDCAD"
+  NZD/USD: "frxNZDUSD"
+
+  # Forex Pairs (Major Crosses)
+  EUR/GBP: "frxEURGBP"
+  EUR/JPY: "frxEURJPY"
+  EUR/CHF: "frxEURCHF"
+  EUR/AUD: "frxEURAUD"
+  EUR/CAD: "frxEURCAD"
+  EUR/NZD: "frxEURNZD"
+  GBP/JPY: "frxGBPJPY"
+  GBP/CHF: "frxGBPCHF"
+  GBP/AUD: "frxGBPAUD"
+  GBP/CAD: "frxGBPCAD"
+  GBP/NZD: "frxGBPNZD"
+  AUD/JPY: "frxAUDJPY"
+  AUD/NZD: "frxAUDNZD"
+  AUD/CAD: "frxAUDCAD"
+  CAD/JPY: "frxCADJPY"
+  CHF/JPY: "frxCHFJPY"
+  NZD/JPY: "frxNZDJPY"
+
+  # Forex Pairs (Minor/Exotic)
+  USD/SGD: "frxUSDSGD"
+  USD/HKD: "frxUSDHKD"
+  USD/MXN: "frxUSDMXN"
+  USD/SEK: "frxUSDSEK"
+  USD/NOK: "frxUSDNOK"
+  USD/DKK: "frxUSDDKK"
+  EUR/SEK: "frxEURSEK"
+  EUR/NOK: "frxEURNOK"
+
+  # Commodities
+  Gold (XAU/USD): "frxXAUUSD"
+  
+# World Indices (Deriv OTC)
+  Wall Street 30: "WLDUSD"
+  Wall Street 30 (EUR): "WLDEUR"
+  Wall Street 30 (AUD): "WLDAUD"
+  Wall Street 30 (XAU): "WLDXAU"
+
+  # Jump Indices
+  Jump 10 Index: "JD10"
+  Jump 25 Index: "JD25"
+  Jump 50 Index: "JD50"
+  Jump 75 Index: "JD75"
+  Jump 100 Index: "JD100"
+
+  # OTC Indices
+  AEX Index: "OTC_AEX"
+  CAC 40 Index: "OTC_FCHI"
+  SMI Index: "OTC_SSMI"
+  Nikkei 225: "OTC_N225"
+  FTSE 100: "OTC_FTSE"
+  ASX 200: "OTC_AS51"
+  AUS 200: "OTC_SX5E"
+
+  # Crypto Basket Indices
+  Crypto 10: "cryBTCUSD"
+  Crypto ETH: "cryETHUSD"
+
+  # Range Break Indices
+  Range Break 100: "RB200"
+  RD Bear: "RDBEAR"
+  RD Bull: "RDBULL"
+
+  # Step Range Break
+  Step Range Break: "stpRNG"
+  Step Range Break 3: "stpRNG3"
+  Step Range Break 5: "stpRNG5"
+
+  # Boom Extended
+  Boom 150 Index: "BOOM150N"
+  Boom 300 Index (new): "BOOM300N"
+  Crash 300 Index (new): "CRASH300N"
+  Crash 600: "CRASH600"
+  Crash 900: "CRASH900"
+  Boom 600: "BOOM600"
+  Boom 900: "BOOM900"
