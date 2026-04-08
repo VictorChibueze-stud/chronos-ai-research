@@ -6,6 +6,7 @@ from src.core.structure_levels import (
     compute_bos_levels,
     compute_choch_level,
     compute_internal_structure_levels,
+    compute_last_impulse_internal_choch_zone,
 )
 
 
@@ -73,6 +74,7 @@ def test_bos_broken_when_price_crosses():
     assert len(bos_levels) == 1
     assert bos_levels[0]["broken"] is True
     assert bos_levels[0]["end_index"] == len(candles) - 1
+    assert bos_levels[0]["break_index"] == 5
 
 
 def test_bos_unbroken_when_price_never_crosses():
@@ -93,6 +95,43 @@ def test_bos_unbroken_when_price_never_crosses():
     assert len(bos_levels) == 1
     assert bos_levels[0]["broken"] is False
     assert bos_levels[0]["end_index"] == len(candles) - 1
+    assert bos_levels[0]["break_index"] is None
+
+
+def test_compute_last_impulse_internal_choch_zone():
+    candles = _make_candles(list(range(100, 120)))
+    internal_legs = [
+        {
+            "type": "impulse",
+            "confirmed": True,
+            "start_price": 100.0,
+            "end_price": 105.0,
+            "start_index": 0,
+            "end_index": 2,
+        },
+        {
+            "type": "impulse",
+            "confirmed": True,
+            "start_price": 104.0,
+            "end_price": 110.0,
+            "start_index": 2,
+            "end_index": 5,
+        },
+    ]
+    parent = {
+        "type": "impulse",
+        "confirmed": True,
+        "start_price": 90.0,
+        "end_price": 115.0,
+        "start_index": 3,
+        "end_index": 18,
+        "internal_structure": {"trend": "up", "legs": internal_legs},
+    }
+    out = compute_last_impulse_internal_choch_zone(candles, [parent])
+    assert out is not None
+    assert out["lower_boundary"] == 104.0
+    assert out["upper_boundary"] == 105.0
+    assert out["source_impulse_start_index_global"] == 3 + 2
 
 
 def test_choch_uses_most_recent_impulse_start():

@@ -28,7 +28,25 @@ RMT_DEFAULT_FILTER_CONFIG = {
     "min_dominance_ratio": 1.2,
 }
 
-INTERNAL_TF_ORDER = ["15m", "5m"]
+_DEFAULT_DEEPENING_TIMEFRAMES = ("4h", "1h", "30m")
+
+
+def _fetch_deepening_candles(symbol: str, tf: str, start_ts: Any, end_ts: Any) -> List[Any]:
+    from src.adapters.binance_data import fetch_binance_ohlc_sync
+    from src.adapters.deriv_data import fetch_deriv_ohlc_sync
+    from src.adapters.yfinance_data import fetch_yfinance_ohlc_sync, is_yfinance_symbol
+
+    sym_upper = symbol.upper()
+    if sym_upper.endswith("USDT") or sym_upper.endswith("BTC"):
+        candles = fetch_binance_ohlc_sync(symbol, tf)
+    elif is_yfinance_symbol(symbol):
+        candles = fetch_yfinance_ohlc_sync(symbol, tf)
+    else:
+        candles = fetch_deriv_ohlc_sync(symbol, tf)
+
+    if start_ts and end_ts:
+        candles = [c for c in candles if start_ts <= c.timestamp <= end_ts]
+    return candles
 
 
 def find_crossing_attempt(
@@ -168,7 +186,8 @@ def _walk_level(
     rmt_filter_config: Dict[str, Any],
     current_depth: int,
     max_depth: int,
-    binance_symbol: Optional[str] = None,
+    deepening_timeframes: List[str],
+    symbol: Optional[str] = None,
     known_first_move_end_index: Optional[int] = None,
     known_first_move_end_price: Optional[float] = None,
 ) -> Dict[str, Any]:
@@ -276,30 +295,19 @@ def _walk_level(
     ]
 
     should_attempt_fallback = (
-        binance_symbol is not None
-        and (
-            len(confirmed_internal) < 3
-            or (internal_tf_used == "current" and len(first_move_candles) < 100)
-        )
+        symbol is not None
+        and len(confirmed_internal) < 3
     )
 
     if should_attempt_fallback:
-        from src.adapters.binance_data import fetch_binance_ohlc_sync
-
         impulse_start_ts = candles[first_move_start].timestamp
         impulse_end_ts = candles[first_move_end].timestamp
 
-        for tf_key in INTERNAL_TF_ORDER:
+        for tf_key in deepening_timeframes:
             try:
-                tf_candles = fetch_binance_ohlc_sync(
-                    binance_symbol,
-                    tf_key,
-                    start_time=impulse_start_ts,
+                tf_slice = _fetch_deepening_candles(
+                    symbol, tf_key, impulse_start_ts, impulse_end_ts
                 )
-                tf_slice = [
-                    candle for candle in tf_candles
-                    if impulse_start_ts <= candle.timestamp <= impulse_end_ts
-                ]
                 if len(tf_slice) < 100:
                     continue
 
@@ -443,7 +451,8 @@ def _walk_level(
         rmt_filter_config,
         current_depth + 1,
         max_depth,
-        binance_symbol=binance_symbol,
+        deepening_timeframes,
+        symbol=symbol,
         known_first_move_end_index=crossing_attempt["global_end_index"],
         known_first_move_end_price=crossing_attempt["end_price"],
     )
@@ -458,7 +467,8 @@ def walk_structure(
     filter_config: Dict[str, Any],
     max_depth: int = 4,
     rmt_filter_config: Optional[Dict[str, Any]] = None,
-    binance_symbol: Optional[str] = None,
+    symbol: Optional[str] = None,
+    deepening_timeframes: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Public entry point for recursive structural depth analysis."""
     global_trend = result.get("trend", "range")
@@ -497,6 +507,11 @@ def walk_structure(
     )
 
     effective_rmt_config = rmt_filter_config if rmt_filter_config is not None else RMT_DEFAULT_FILTER_CONFIG
+    dfs = (
+        list(deepening_timeframes)
+        if deepening_timeframes is not None
+        else list(_DEFAULT_DEEPENING_TIMEFRAMES)
+    )
 
     root = _walk_level(
         candles,
@@ -507,7 +522,8 @@ def walk_structure(
         effective_rmt_config,
         current_depth=1,
         max_depth=max_depth,
-        binance_symbol=binance_symbol,
+        deepening_timeframes=dfs,
+        symbol=symbol,
     )
 
     levels: List[Dict[str, Any]] = []

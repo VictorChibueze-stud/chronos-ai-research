@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { QueryProvider } from "@/components/query-provider";
 import { api } from "@/lib/api";
+import { formatScore } from "@/lib/format-display";
 import type { SetupSummary } from "@/lib/types";
 
 const CATEGORIES: SetupSummary["category"][] = ["FOREX", "CRYPTO", "COMMODITIES", "INDICES", "SYNTHETIC"];
@@ -22,14 +23,14 @@ function accentColor(setup: SetupSummary): string {
 }
 
 function StatSkeleton() {
-  return <div className="h-[68px] animate-pulse border border-[#2A2E39] bg-[#1E222D]" />;
+  return <div className="skeleton-bar h-[68px] border border-[#2A2E39]" />;
 }
 
 function HeatmapSkeleton() {
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2">
       {Array.from({ length: 24 }).map((_, idx) => (
-        <div key={idx} className="h-[72px] animate-pulse border border-[#2A2E39] bg-[#1E222D]" />
+        <div key={idx} className="skeleton-bar h-[72px] border border-[#2A2E39]" />
       ))}
     </div>
   );
@@ -150,7 +151,7 @@ function RadarContent() {
                   >
                     <div className="truncate text-[12px] font-bold text-[#D1D4DC]">{setup.symbol}</div>
                     <div className="mt-4 text-[9px] uppercase tracking-[0.08em] text-[#787B86]">{setup.category}</div>
-                    <div className="absolute bottom-1 right-2 text-[11px] text-[#787B86]">{setup.trend_score.toFixed(0)}</div>
+                    <div className="absolute bottom-1 right-2 text-[11px] text-[#787B86]">{formatScore(setup.trend_score)}</div>
                   </div>
                 ))}
                 {Array.from({ length: placeholderCount }).map((_, idx) => (

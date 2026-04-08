@@ -39,7 +39,7 @@ def _default_filter_config() -> Dict[str, Any]:
     }
 
 
-def _make_downtrend_with_retracement(n_candles: int = 200) -> Tuple[List[Candle], Dict[str, Any]]:
+def _make_downtrend_with_retracement(n_candles: int = 220) -> Tuple[List[Candle], Dict[str, Any]]:
     """Deterministic downtrend with 2 confirmed impulses and active retracement."""
     prices: List[float] = []
 
@@ -58,8 +58,16 @@ def _make_downtrend_with_retracement(n_candles: int = 200) -> Tuple[List[Candle]
     for i in range(1, 21):
         prices.append(round(60.0 - i * 0.5, 2))
 
+    # Micro-oscillation pad: swings stay within trend_confirmation_pct of the local mean
+    # so ANCHOR-TO-NOW does not latch onto a late extreme with no room for leg iteration.
+    # Plateau with slow phase flip (every 9 bars) so the last confirmed retracement
+    # spans enough candles for _walk_level (slice length >= 10).
+    center = prices[-1]
+    j = 0
     while len(prices) < n_candles:
-        prices.append(round(prices[-1] - 0.2, 2))
+        block = 0.4 if (j // 9) % 2 == 0 else -0.35
+        prices.append(round(center + block, 2))
+        j += 1
     prices = prices[:n_candles]
 
     candles = _make_candles(prices)

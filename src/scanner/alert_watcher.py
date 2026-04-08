@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from src.adapters.binance_data import fetch_binance_ohlc_sync
 from src.adapters.deriv_data import fetch_deriv_ohlc_sync
+from src.adapters.yfinance_data import fetch_yfinance_ohlc_sync, is_yfinance_symbol
 from src.core.structural_walker import serialize_state_report, walk_structure
 from src.core.trend_id import identify_trend
 from src.db.models import AlertZone, MonitoredSetup
@@ -41,6 +42,8 @@ async def _fetch_candles(symbol: str, timeframe: str) -> list[Any]:
 
     if _is_binance_symbol(normalized):
         fetch_fn = lambda: fetch_binance_ohlc_sync(normalized, timeframe)
+    elif is_yfinance_symbol(normalized):
+        fetch_fn = lambda: fetch_yfinance_ohlc_sync(normalized, timeframe)
     else:
         fetch_fn = lambda: fetch_deriv_ohlc_sync(normalized, timeframe)
 
@@ -119,7 +122,7 @@ async def _trigger_reanalysis(setup: MonitoredSetup, db: Session) -> None:
             trend_result,
             _FILTER_CONFIG,
             max_depth=3,
-            binance_symbol=setup.symbol if _is_binance_symbol(setup.symbol) else None,
+            symbol=setup.symbol,
         ),
     )
     serialized = await loop.run_in_executor(None, lambda: serialize_state_report(walker_result))

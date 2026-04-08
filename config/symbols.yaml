@@ -1,6 +1,14 @@
 # Mapping of human-readable names to broker-specific symbol codes.
 # Phase 4: Multi-asset expansion with Forex, Commodities, and expanded Synthetics.
 
+# Yahoo Finance (equity indices) — IKENGA internal codes; enable broker "yfinance" in scan settings.
+yfinance:
+  - SPX500
+  - NAS100
+  - DAX40
+  - FTSE100
+  - NKY225
+
 deriv:
   # Volatility Indices
   Volatility 10 Index: "R_10"

@@ -1,3 +1,5 @@
+import { formatScore } from "@/lib/format-display";
+
 interface ScoreBarProps {
   value: number;
 }
@@ -41,7 +43,7 @@ export function ScoreBar({ value }: ScoreBarProps) {
           fontFamily: '"IBM Plex Mono", monospace',
         }}
       >
-        {clamped.toFixed(0)}
+        {formatScore(clamped)}
       </span>
     </div>
   );

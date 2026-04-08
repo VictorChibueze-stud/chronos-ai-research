@@ -6,7 +6,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Dict, Any
 
-
 def _collect_candidates(candles: List[Any], from_index: int, direction: str, min_swing_candles: int) -> List[Dict]:
     """Scan forward from from_index to find local min/max."""
     candidates = []
@@ -86,46 +85,25 @@ def identify_trend(
     if len(candles) < 10:
         return {"trend": "range", "trend_start": None, "legs": [], "current_phase": "unknown"}
 
-    # ANCHOR-TO-NOW CLASSIFICATION
-    # Find the structural extreme furthest from current price.
-    # That extreme is the dominant anchor. Its relationship to current price
-    # determines the trend direction.
+    # STEP 1: CLASSIFY WINDOW
+    highest_price = max(c.high for c in candles)
+    lowest_price = min(c.low for c in candles)
 
-    high_candidates = _collect_candidates(candles, -1, "high", min_swing_candles)
-    low_candidates = _collect_candidates(candles, -1, "low", min_swing_candles)
+    peak_index = next(i for i, c in enumerate(candles) if c.high == highest_price)
+    trough_index = next(i for i, c in enumerate(candles) if c.low == lowest_price)
 
-    if not high_candidates and not low_candidates:
-        return {"trend": "range", "trend_start": None, "legs": [], "current_phase": "unknown"}
+    total_range = highest_price - lowest_price
 
-    current_price = float(candles[-1].close)
-
-    # Score each candidate by distance from current price (percentage)
-    def _pct_distance(candidate_price: float) -> float:
-        if candidate_price <= 0:
-            return 0.0
-        return abs(candidate_price - current_price) / candidate_price
-
-    all_candidates = high_candidates + low_candidates
-    anchor = max(all_candidates, key=lambda c: _pct_distance(float(c["price"])))
-
-    anchor_price = float(anchor["price"])
-    total_range = abs(anchor_price - current_price)
-    pct_move = _pct_distance(anchor_price)
+    pct_move = total_range / highest_price if highest_price > 0 else 0
     if pct_move < trend_confirmation_pct:
         return {"trend": "range", "trend_start": None, "legs": [], "current_phase": "unknown"}
 
-    if anchor_price > current_price:
-        # Anchor is above current price — market fell from that peak → downtrend
+    if peak_index < trough_index:
         trend = "down"
+        trend_start = {"price": highest_price, "index": peak_index, "timestamp": candles[peak_index].timestamp}
     else:
-        # Anchor is below current price — market rose from that trough → uptrend
         trend = "up"
-
-    trend_start = {
-        "price": anchor_price,
-        "index": anchor["index"],
-        "timestamp": anchor["timestamp"],
-    }
+        trend_start = {"price": lowest_price, "index": trough_index, "timestamp": candles[trough_index].timestamp}
 
     # STEP 5: BUILD LEGS ITERATIVELY
     legs = []

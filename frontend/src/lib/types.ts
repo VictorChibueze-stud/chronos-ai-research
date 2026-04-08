@@ -1,4 +1,18 @@
-export interface ChochZone { lower_boundary: number; upper_boundary: number; }
+/** Setup summary CHoCH band (price only). */
+export interface ChochZoneBounds {
+  lower_boundary: number;
+  upper_boundary: number;
+}
+
+/** CHoCH zone overlay from GET /api/analysis/:symbol */
+export interface ChochZone {
+  depth: number;
+  lower_boundary: number;
+  upper_boundary: number;
+  start_timestamp: string;
+  end_timestamp: string;
+  color: string;
+}
 export interface BOS { price: number; break_type: "true" | "false" | "pending" | "broken"; }
 export type MTFAlignment = Record<string, string>;
 export interface ActiveZone {
@@ -7,11 +21,18 @@ export interface ActiveZone {
   price_low: number;
   is_manual_override: boolean;
 }
+export type ReadinessState = "FULL" | "PARTIAL" | "ERROR" | "UNSCANNED";
+
+export interface ReadinessCoverage {
+  available: string[];
+  missing: string[];
+}
+
 export interface Setup {
-  setup_id: number; symbol: string; broker: string; category: string; timeframe: string;
+  setup_id: number | null; symbol: string; broker: string; category: string; timeframe: string;
   trend: "up" | "down" | "range"; current_phase: "impulse" | "retracement" | "range";
   fsm_state: string; trend_score: number; pullback_depth: number; total_mitigation_count: number;
-  waiting_for: string; active_choch_zone: ChochZone | null; active_bos: BOS | null;
+  waiting_for: string; active_choch_zone: ChochZoneBounds | null; active_bos: BOS | null;
   active_zones?: ActiveZone[];
   mtf_alignment: MTFAlignment;
   structural_state?: StructuralState;
@@ -24,6 +45,101 @@ export interface Setup {
   status?: string;
   ema_signal?: "LONG" | "SHORT" | "WAITING" | null;
   structural_state_json?: StructuralState;
+  readiness_state?: ReadinessState;
+  readiness_coverage?: ReadinessCoverage;
+  readiness_error?: string | null;
+  score_components?: {
+    price_component?: number;
+    bar_component?: number;
+    retracement_bonus?: number;
+    price_ratio?: number;
+    bar_ratio?: number;
+  };
+  universe_rank?: number | null;
+  total_score?: number;
+  timeframe_basis?: "weekly" | "daily";
+}
+
+export interface UniverseScore {
+  symbol: string;
+  timeframe_basis: "weekly" | "daily";
+  trend_direction: "up" | "down" | "range";
+  confirmed_leg_count: number;
+  impulse_price_ratio: number;
+  impulse_velocity_ratio: number;
+  retracement_phase_bonus: number;
+  candidate_impulse_bonus: number;
+  total_score: number;
+  universe_rank: number | null;
+  last_computed_at: string;
+}
+
+export interface ScanJobLog {
+  id: number;
+  job_type: "universe_ranking" | "active_refresh";
+  started_at: string;
+  completed_at: string | null;
+  duration_seconds: number | null;
+  total_symbols: number;
+  success_count: number;
+  failure_count: number;
+  status: "running" | "complete" | "failed";
+  error_message: string | null;
+}
+
+export interface UniverseRankingStatus {
+  in_progress: boolean;
+  total_symbols: number;
+  symbols_scored: number;
+  current_symbol: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  last_error: string | null;
+  estimated_seconds_remaining: number | null;
+  /** Batch global-structure job (from ranking-status payload). */
+  global_structure_in_progress?: boolean;
+  /** Batch prime-impulse job (from ranking-status payload). */
+  prime_impulse_in_progress?: boolean;
+  /** Depth / walker batch job when enabled server-side (from ranking-status payload). */
+  walker_in_progress?: boolean;
+}
+
+export interface ScanScoreWeights {
+  price_ratio_weight: number;
+  bar_ratio_weight: number;
+}
+
+export type UniverseScanFrequency = "hourly" | "daily" | "weekly" | "monthly";
+
+export type ActiveRefreshHours = 1 | 2 | 4 | 8 | 12 | 24;
+
+export interface CategoryMinSlots {
+  forex: number;
+  commodity: number;
+  indices: number;
+  synthetic: number;
+  crypto: number;
+}
+
+export interface ScanSettings {
+  binance_top_n: number;
+  brokers: Array<"binance" | "deriv" | "yfinance">;
+  deriv_categories: string[];
+  include_symbols: string[];
+  exclude_symbols: string[];
+  score_weights: ScanScoreWeights;
+  retracement_bonus: number;
+  deriv_category_overrides: Record<string, string>;
+  universe_scan_frequency: UniverseScanFrequency;
+  active_refresh_hours: ActiveRefreshHours;
+  category_min_slots: CategoryMinSlots;
+}
+
+export interface ScanSettingsHistoryRow {
+  id: number;
+  scope: string;
+  settings: ScanSettings;
+  created_at: string | null;
 }
 export interface SystemState {
   active_trends: number; in_retracement: number; high_conviction: number; in_impulse: number;
@@ -108,19 +224,243 @@ export interface HealthResponse {
   killswitch_active?: boolean;
 }
 
+export interface ScanStartResponse {
+  status: string;
+  total_symbols?: number;
+}
+
+export interface ExecutionStatusResponse {
+  execution_enabled: boolean;
+  execution_paper_only: boolean;
+  execution_provider: string;
+}
+
+export interface ExecutionOrderSummary {
+  id: number;
+  client_order_id: string;
+  provider: string;
+  symbol: string;
+  side: string;
+  status: string;
+  provider_order_id: string | null;
+  error_message: string | null;
+  created_at: string | null;
+}
+
+export interface ExecutionOrderListResponse {
+  items: ExecutionOrderSummary[];
+}
+
+export interface ExecutionEventItem {
+  id: number;
+  event_type: string;
+  message: string | null;
+  payload: Record<string, unknown>;
+  created_at: string | null;
+}
+
+export interface ExecutionOrderEventsResponse {
+  order_id: number;
+  items: ExecutionEventItem[];
+}
+
+export interface ExecutionEventRecord {
+  event_type: string;
+  message?: string | null;
+  payload?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface OrderSubmissionResponse {
+  ok: boolean;
+  client_order_id: string;
+  status: string;
+  provider: string;
+  provider_order_id?: string | null;
+  message?: string | null;
+  events: ExecutionEventRecord[];
+}
+
+export type ExecutionProviderId = "deriv" | "stub";
+
+export type DerivDurationUnit = "t" | "s" | "m" | "h" | "d";
+
+/** POST /api/execution/orders body (subset; server fills defaults). */
+export interface NormalizedOrderIntent {
+  symbol: string;
+  side: "long" | "short";
+  stake_amount: number;
+  client_order_id?: string;
+  provider?: ExecutionProviderId;
+  basis?: "stake" | "payout";
+  currency?: string;
+  duration?: number;
+  duration_unit?: DerivDurationUnit;
+  contract_type?: "CALL" | "PUT";
+  metadata?: Record<string, unknown>;
+}
+
+/** POST /api/execution/from-signal body */
+export interface FromSignalRequest {
+  symbol: string;
+  timeframe?: string;
+  stake_amount?: number;
+}
+
 export interface KillswitchResponse {
   killswitch_active: boolean;
 }
+
+export interface TrendLeg {
+  type: "impulse" | "retracement";
+  start_price: number;
+  end_price: number | null;
+  start_index: number;
+  end_index: number | null;
+  start_timestamp: string | null;
+  end_timestamp: string | null;
+  confirmed: boolean;
+  /** Timeframe used for internal structure when finer TF deepening ran (e.g. "5m"); else "current". */
+  internal_tf_used?: string;
+  internal_legs?: TrendLeg[];
+}
+
+/** Global / internal CHoCH band from analysis (not walker depth zones). */
+export interface StructureChochZone {
+  lower_boundary: number;
+  upper_boundary: number;
+  start_timestamp: string;
+  end_timestamp: string;
+  broken?: boolean;
+  trend_direction?: string;
+  color?: string;
+}
+
+export interface BosLevel {
+  price: number;
+  start_index: number;
+  start_timestamp: string;
+  end_timestamp?: string;
+  /** Index of break bar when broken; else same as last bar for segment end. */
+  end_index?: number;
+  broken: boolean;
+  trend_direction: string;
+  /** When set (e.g. candidate-move stack), chart uses this instead of default BOS blue. */
+  color?: string;
+}
+
+export interface ChochLevel {
+  price: number;
+  start_index: number;
+  start_timestamp: string;
+  broken: boolean;
+  trend_direction?: string;
+}
+
+export interface TrendWindowStructure {
+  trend: string;
+  current_phase: string | null;
+  trend_start_price: number;
+  trend_start_timestamp: string;
+  legs: TrendLeg[];
+  bos_levels: BosLevel[];
+  choch_level: ChochLevel | null;
+  choch_zone: ChochZone | null;
+}
+
+/** Serialized sub-trend on slice from CHoCH candidate pivot (teal overlays). */
+export interface CandidateMoveTealStructure {
+  legs?: TrendLeg[];
+  bos_levels?: BosLevel[];
+  global_choch_zone?: StructureChochZone | null;
+  internal_choch_zone?: StructureChochZone | null;
+}
+
+export interface CandidateMovePayload {
+  pivot_index: number;
+  pivot_price: number;
+  move_start_timestamp: string;
+  reference_bos_price: number | null;
+  reference_bos_start_index: number | null;
+  structure_broken: boolean | null;
+  teal_structure: CandidateMoveTealStructure | null;
+  candidate_ichoch_reached?: boolean | null;
+  candidate_new_move_active?: boolean;
+}
+
+export interface NewMoveAnalysis {
+  trend: string | null;
+  current_phase: string | null;
+  leg_count: number;
+  legs: TrendLeg[];
+  bos_levels: BosLevel[];
+  choch_zone: ChochZone | null;
+  choch_reached: boolean;
+  move_start_timestamp: string;
+  entry_price: number;
+  stop_loss: number;
+  target: number | null;
+}
+
+/** Optional debug overrides for GET /api/analysis (omit server defaults). */
+export interface AnalysisDevParams {
+  use_parent_relative_filter: boolean;
+  min_impulse_parent_ratio: number;
+  use_momentum_filter: boolean;
+  min_momentum_ratio: number;
+  use_dominance_filter: boolean;
+  min_dominance_ratio: number;
+  /** When set, sent as min_swing_candles; otherwise omitted (server default 3). */
+  min_swing_candles: number | null;
+  /** When set, sent as trend_confirmation_pct; otherwise omitted (server default 0.03 outer). */
+  trend_confirmation_pct: number | null;
+  /** When set, sent as max_walk_depth; otherwise omitted (server default 3). */
+  max_walk_depth: number | null;
+  rmt_use_parent_relative_filter: boolean | null;
+  rmt_min_impulse_parent_ratio: number | null;
+  rmt_use_momentum_filter: boolean | null;
+  rmt_min_momentum_ratio: number | null;
+  rmt_use_dominance_filter: boolean | null;
+  rmt_min_dominance_ratio: number | null;
+}
+
+export const DEFAULT_ANALYSIS_DEV_PARAMS: AnalysisDevParams = {
+  use_parent_relative_filter: true,
+  min_impulse_parent_ratio: 0.15,
+  use_momentum_filter: true,
+  min_momentum_ratio: 0.5,
+  use_dominance_filter: true,
+  min_dominance_ratio: 1.5,
+  min_swing_candles: null,
+  trend_confirmation_pct: null,
+  max_walk_depth: null,
+  rmt_use_parent_relative_filter: null,
+  rmt_min_impulse_parent_ratio: null,
+  rmt_use_momentum_filter: null,
+  rmt_min_momentum_ratio: null,
+  rmt_use_dominance_filter: null,
+  rmt_min_dominance_ratio: null,
+};
 
 export interface AnalysisResponse {
   status: string;
   symbol: string;
   timeframe?: string;
+  /** Global structure cache reference: "daily" | "weekly" when served from GlobalStructureCache. */
+  reference_timeframe?: string | null;
   structural_state?: StructuralState;
   global_trend?: string;
   total_mitigation_count?: number;
   max_depth_reached?: number;
   waiting_for?: string;
+  legs?: TrendLeg[];
+  bos_levels?: BosLevel[];
+  choch_level?: ChochLevel | null;
+  choch_zones?: ChochZone[];
+  global_choch_zone?: StructureChochZone | null;
+  internal_choch_zone?: StructureChochZone | null;
+  new_move?: NewMoveAnalysis | null;
+  candidate_move?: CandidateMovePayload | null;
 }
 
 export interface ChartZone {
@@ -138,12 +478,97 @@ export interface CandleBar {
   volume: number;
 }
 
-export interface ChartStructuralLevel {
-  depth: number;
-  color: string;
-  chochZone: { lower: number; upper: number } | null;
-  bosPrice: number | null;
-  bosColor?: string;
-  impulseStart: { price: number; time: number } | null;
-  impulseEnd: { price: number; time: number } | null;
+export type IntegrationHealth = "healthy" | "degraded" | "offline" | "unknown";
+
+export interface BrokerCredentialsInput {
+  api_key?: string;
+  api_secret?: string;
+  token?: string;
+}
+
+export interface BrokerAccountSnapshot {
+  account_id?: string;
+  balance?: number | null;
+  currency?: string | null;
+  challenge_status?: string | null;
+  raw?: Record<string, unknown>;
+}
+
+export interface BrokerIntegrationStatus {
+  broker: "binance" | "deriv" | "ftmo";
+  connected: boolean;
+  health: IntegrationHealth;
+  last_sync: string | null;
+  message: string;
+  account?: BrokerAccountSnapshot | null;
+}
+
+export interface IntegrationsStatusResponse {
+  status: string;
+  generated_at: string;
+  brokers: BrokerIntegrationStatus[];
+}
+
+export interface FundamentalEvent {
+  name: string;
+  category: string;
+  scheduled_at: string;
+  impact_level: "high" | "medium" | "low";
+  rank: number | null;
+  currency: string;
+}
+
+export interface FundamentalEventsResponse {
+  symbol: string;
+  blackout_active: boolean;
+  blackout_reason: string | null;
+  next_events: FundamentalEvent[];
+}
+
+export interface FundamentalNewsArticle {
+  headline: string;
+  source_name: string;
+  published_at: string;
+  sentiment_label: "positive" | "negative" | "neutral";
+  sentiment_score: number;
+  url: string;
+}
+
+export interface FundamentalNewsResponse {
+  symbol: string;
+  articles: FundamentalNewsArticle[];
+}
+
+export type BrokerConnectionTestRequest = BrokerCredentialsInput;
+
+export interface BrokerConnectionTestResponse {
+  ok: boolean;
+  broker: "binance" | "deriv" | "ftmo";
+  message: string;
+  checked_at: string;
+  account?: BrokerAccountSnapshot | null;
+}
+
+export interface ActiveListResponse {
+  symbols: string[];
+}
+
+export interface ActiveListMutationResponse {
+  ok: boolean;
+  symbol: string;
+}
+
+export interface SignalHistoryItem {
+  id: number;
+  symbol: string;
+  timeframe: string;
+  signal: "LONG" | "SHORT" | string;
+  trend_direction: string | null;
+  trend_score: number | null;
+  emitted_at: string | null;
+}
+
+export interface SignalHistoryResponse {
+  symbol: string;
+  items: SignalHistoryItem[];
 }

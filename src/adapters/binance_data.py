@@ -8,13 +8,18 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import hmac
 import logging
 import pathlib
+import time
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
 import aiohttp
+import requests
 import yaml
+from urllib.parse import urlencode
 
 from src.core.features import Candle
 
@@ -33,6 +38,11 @@ INTERVAL_TO_MINUTES = {
     "1h": 60,
     "4h": 240,
     "1d": 1440,
+    "1w": 10080,
+    "1mo": 43200,
+}
+INTERVAL_TO_BINANCE = {
+    "1mo": "1M",
 }
 
 BINANCE_API_BASE = "https://api.binance.com/api/v3"
@@ -66,6 +76,8 @@ def _get_lookback_days(interval: str) -> float:
         "1h": 100.0,
         "4h": 365.0,
         "1d": 2190.0,
+        "1w": 3650.0,
+        "1mo": 7300.0,
     }
     return defaults.get(interval, 7.5)
 
@@ -143,7 +155,7 @@ async def fetch_binance_ohlc(
         # Fetch all candles since the given timestamp, paging forward.
         params: Dict[str, Any] = {
             "symbol": symbol,
-            "interval": interval,
+            "interval": INTERVAL_TO_BINANCE.get(interval, interval),
             "limit": MAX_CANDLES_PER_REQUEST,
             "startTime": int(start_time.timestamp() * 1000),
         }
@@ -176,7 +188,7 @@ async def fetch_binance_ohlc(
             # Build request params
             params = {
                 "symbol": symbol,
-                "interval": interval,
+                "interval": INTERVAL_TO_BINANCE.get(interval, interval),
                 "limit": MAX_CANDLES_PER_REQUEST,
             }
             if end_time is not None:
@@ -245,8 +257,14 @@ async def _fetch_klines_with_retry(params: Dict[str, Any]) -> List[List]:
                         logger.debug(f"Successfully fetched klines (attempt {attempt})")
                         return data
                     else:
+                        body = await resp.text()
                         logger.warning(
-                            f"HTTP {resp.status} on attempt {attempt}/{MAX_RETRIES}"
+                            "Binance klines HTTP %s attempt=%s/%s params=%s body=%s",
+                            resp.status,
+                            attempt,
+                            MAX_RETRIES,
+                            params,
+                            body[:200],
                         )
         except aiohttp.ClientError as e:
             logger.warning(
@@ -262,6 +280,7 @@ async def _fetch_klines_with_retry(params: Dict[str, Any]) -> List[List]:
             logger.debug(f"Retrying in {wait_time}s...")
             await asyncio.sleep(wait_time)
 
+    logger.error("Binance klines retries exhausted params=%s", params)
     raise aiohttp.ClientError(
         f"Failed to fetch klines after {MAX_RETRIES} retries: {params}"
     )
@@ -294,6 +313,35 @@ def fetch_binance_ohlc_sync(
     # Run on a worker thread to avoid calling asyncio.run() in a running loop.
     with ThreadPoolExecutor(max_workers=1) as executor:
         return executor.submit(_run_fetch).result()
+
+
+def fetch_binance_testnet_account(
+    api_key: str,
+    api_secret: str,
+    *,
+    recv_window: int = 5000,
+) -> Dict[str, Any]:
+    """Fetch Binance Spot Testnet account payload using signed USER_DATA endpoint."""
+    params = {
+        "timestamp": int(time.time() * 1000),
+        "recvWindow": recv_window,
+    }
+    query = urlencode(params)
+    signature = hmac.new(
+        api_secret.encode("utf-8"),
+        query.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    url = f"https://testnet.binance.vision/api/v3/account?{query}&signature={signature}"
+
+    response = requests.get(
+        url,
+        headers={"X-MBX-APIKEY": api_key},
+        timeout=15,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"Binance testnet account request failed: {response.status_code}")
+    return response.json()
 
 
 if __name__ == "__main__":

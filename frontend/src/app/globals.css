@@ -140,6 +140,39 @@ body {
   100% { transform: translateX(100%); }
 }
 
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes pulse-red {
+  0%,
+  100% {
+    box-shadow: none;
+  }
+  50% {
+    box-shadow: 0 0 8px 2px rgba(239, 83, 80, 0.55);
+  }
+}
+
+.skeleton-bar {
+  background: linear-gradient(
+    90deg,
+    #1e222d 0%,
+    #2a2e39 40%,
+    #363a45 50%,
+    #2a2e39 60%,
+    #1e222d 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.8s ease-in-out infinite;
+  border-radius: 0;
+}
+
 .scanner-row:hover {
   background: var(--bg-hover);
 }

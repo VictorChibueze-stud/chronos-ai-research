@@ -2,92 +2,129 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Project Overview
+
+**Ikenga** (codename: Chronos AI) is a research-grade, multi-timeframe trend-following system for Deriv synthetic indices and Binance crypto pairs. It encodes a discretionary trading strategy into deterministic Python with an optional LLM reasoning layer.
+
+**This is not a production trading system.** No live orders are placed without `EXECUTION_ENABLED=1` explicitly set.
+
 ## Commands
 
+### Backend
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Run FastAPI backend (http://localhost:8000)
+python scripts/run_api.py
+
+# Run Streamlit research UI
+python scripts/run_ui.py
+
+# Initialize database
+python scripts/init_db.py
 
 # Run all tests
 pytest
 
 # Run a single test file
-pytest tests/test_features.py
+pytest tests/test_trend_id.py
 
 # Run a single test by name
 pytest tests/test_features.py::test_function_name
-
-# Visual feature exploration (edit SYMBOL/TIMEFRAME/CSV_PATH at top of the script first)
-python -m exploration.feature_explorer
-
-# Live EDA: fetch Deriv OHLC and plot trend/structure features (requires .env)
-python -m exploration.eda_deriv_trend
 ```
 
-## Environment Setup
+### Frontend
+```bash
+cd frontend
+npm run dev      # development server
+npm run build    # production build
+npm run lint     # lint check
+```
 
-Copy `.env.example` to `.env` and fill in:
-- `DERIV_APP_ID`
-- `DERIV_API_TOKEN`
-
-The Deriv adapter loads these via `DerivConfig.from_env()`.
+### Database Migrations
+```bash
+alembic upgrade head     # apply migrations
+alembic revision --autogenerate -m "description"  # generate new migration
+```
 
 ## Architecture
 
-Chronos-AI is a research lab for systematic trend-following strategies on Deriv synthetic indices (Volatility 10/25). The core design principle is a **hard split between deterministic Python and LLM reasoning**: all numeric trading math lives in Python; the LLM only reasons at a conceptual level and calls Python tools.
+### Core Design Invariants (read before editing `src/core/`)
 
-### Data Flow
+- **Deterministic Python owns all numeric logic.** The LLM layer (`src/llm/`) consumes structured Pydantic outputs and calls deterministic tools — it never performs market math directly.
+- **Trend identification is scoring-based, not PIP-based.**
+- **CHoCH requires ≥2 confirmed impulses** before it is valid.
+- **BOS and CHoCH levels extend to chart right edge** for visualization continuity.
+- **Internal structure indices are offset into global candle index space** before plotting.
+- **Retracement depth is preferred over Fibonacci** in the analysis pipeline.
+- **EMA crossover markers inside internal retracements are intentionally suppressed.**
+- When changing `src/core/`, always update corresponding tests in the same commit.
+
+### Layer Separation
 
 ```
-Candle (OHLC struct)
-  → compute_price_features()       [src/core/features.py]   → features dict
-  → build_snapshot() / build_multi_snapshot()  [src/llm/context.py]  → MarketSnapshot (Pydantic)
-  → StrategyFn(StrategyContext) → Signal       [src/core/signals.py]
-  → run_backtest_single_symbol()   [src/backtest/engine.py]  → BacktestResult
+Data Adapters        src/adapters/          Deriv WebSocket, Binance REST, CSV
+        ↓
+Core Feature Engine  src/core/              Trend ID, leg detection, structure, indicators
+        ↓
+Scanner / Orchestrator  src/scanner/, src/orchestrator/   Multi-symbol scanning, setup lifecycle
+        ↓
+API                  src/api/               FastAPI routers, background jobs, CORS
+        ↓
+Frontend             frontend/src/          Next.js 16 / React 19 / TailwindCSS v4
 ```
 
-### Module Responsibilities
+The LLM layer (`src/llm/`) is a parallel concern that consumes `src/core/` output via `src/llm/context.py` and `src/llm/tools.py`.
 
-| Path | Responsibility |
-|------|----------------|
-| `src/core/features.py` | Pure, stateless feature engine. Defines `Candle` dataclass and `compute_price_features()`. All indicator and market-structure logic (EMAs, ATR, swing highs/lows, BOS/CHOCH, FVGs, regime tags). |
-| `src/core/trend_structure.py` | `detect_structure(candles)` — pure BOS state machine that segments candles into alternating impulse/retracement legs and emits BOS events. No indicator lookback; purely price-action driven. |
-| `src/core/signals.py` | Defines `Signal`, `StrategyContext`, and `StrategyFn` protocol. Strategies are pluggable callables. |
-| `src/core/risk.py` | Broker-agnostic position sizing, drawdown limits, kill-switch logic. |
-| `src/core/timeframes.py` | Loads `config/timeframe_windows.yaml`; computes deterministic start/end windows for a given timeframe. |
-| `src/core/experiment_registry.py` | Creates stamped experiment folders under `experiments/` with params, data manifest, and results. |
-| `src/adapters/deriv_data.py` | Deriv WebSocket adapter: `fetch_deriv_ohlc()` returns `List[Candle]`. |
-| `src/adapters/local_data.py` | CSV loader: `load_ohlc_from_csv()` returns `List[Candle]`. |
-| `src/adapters/execution_stub.py` | No-op execution adapter (live trading not yet implemented). |
-| `src/backtest/engine.py` | `run_backtest_single_symbol(candles, strategy_fn, BacktestConfig)` → `BacktestResult`. One open position at a time. |
-| `src/backtest/metrics.py` | `compute_equity_metrics(trades)` for P&L, R-multiples, drawdown, equity curve. |
-| `src/llm/schemas.py` | Pydantic models for LLM payloads: `MarketSnapshot`, `TrendState`, `VolatilityState`, `StructureState`, etc. |
-| `src/llm/context.py` | `build_snapshot()` / `build_multi_snapshot()` convert `List[Candle]` → `MarketSnapshot`. |
-| `src/llm/tools.py` | Small, audited Python tools the LLM can call (SL/TP calculation, position sizing). |
-| `src/llm/orchestrator_schema.py` | JSON schema for LLM orchestration (e.g., Langflow integration). |
-| `src/agent/harness.py` | `AgentHarness`: fetches multi-timeframe candles (D1/4H/1H), builds feature context, generates LLM prompt. |
-| `src/agent/prompts.py` | `SYSTEM_PROMPT_V1` and other prompt templates. |
-| `exploration/feature_explorer.py` | Script to visualize indicator and structure outputs as PNGs saved to `data/processed/plots/`. |
-| `notebook/` | Jupyter notebooks for phase experiments (00_index through 06). Run deterministically: restart kernel, run all cells. |
-| `config/params.yaml` | Global params (timeframes, min R:R 3.0, risk per trade) and per-symbol Deriv settings. |
-| `config/symbols.yaml` | Human-readable symbol → broker code mapping (e.g., "Volatility 10 Index" → "R_10"). |
-| `config/timeframe_windows.yaml` | Canonical lookback windows per timeframe for reproducible experiments. |
+### Key Data Flows
 
-### Key Invariants
+1. **Candle ingestion**: `binance_data.py` / `deriv_data.py` → normalized `Candle` objects → `CandleCache` table
+2. **Trend analysis**: `features.py` (swing detection, EMA/RSI/ATR) → `trend_id.py` (scoring, leg classification) → `structure_levels.py` (BOS, CHoCH, FVG) → `structural_walker.py` (recursive nested resolution)
+3. **Scanner**: `market_scanner.py` runs 4-hourly, scans 350+ Binance pairs + hardcoded Deriv universe, stores `MonitoredSetup` records (capped at 50, score-based LRU eviction)
+4. **Execution**: `NormalizedOrderIntent` → `orchestrator.py` (killswitch check) → provider (`deriv.py` or `stub.py`) → persisted `ExecutionOrder` + `ExecutionEvent`
 
-- `src/core/` is **broker-agnostic** — no Deriv or external API references.
-- `src/core/features.py` is **pure and stateless** — functions take candle lists, return dicts, no side effects.
-- The backtest engine and live path use **the same** `StrategyFn` and risk code — no separate simulation branch.
-- LLM never does numeric math; it calls `src/llm/tools.py` for all levels and sizing.
+### Configuration Files
 
-## Development Phases
+- `config/timeframe_windows.yaml` — all indicator lookback windows and ATR multipliers per timeframe. Modify here, not in code.
+- `config/correlation_rules.yaml` — symbol correlation groups for confluence analysis.
 
-The project tracks progress in `progress.json`. Phases:
-- **Phase 0** (done): Repo structure, configs, system spec
-- **Phase 1** (done): Core feature engine (`src/core/features.py`) with full unit tests
-- **Phase 2** (done): Data adapters (Deriv + CSV)
-- **Phase 3** (in progress): Backtest engine and metrics
-- **Phase E1** (in progress): EDA — live Deriv data fetch and visual validation
-- **Phase 4** (in progress): Strategy API and baseline strategy
-- **Phase 5** (in progress): Risk engine
-- **Phase 6** (in progress): LLM/agent integration (Langflow)
+### Database Schema (key tables)
+
+- `MonitoredSetup` — symbol + HTF timeframe + trend direction + score + structural state JSON
+- `AlertZone` — support/resistance zones; `is_manual_override=True` protects setup from eviction
+- `CandleCache` — OHLC with unique (symbol, timeframe, timestamp) constraint
+- `ExecutionOrder` / `ExecutionEvent` — order lifecycle with full audit trail
+- `SystemSettings` — killswitch state (check before any execution path)
+
+### API Key Endpoints
+
+| Router | Key Endpoints |
+|--------|--------------|
+| `/api/analysis/{symbol}` | Full trend + structure analysis; query params override filter thresholds |
+| `/api/setups/` | CRUD for monitored setups, trigger scan |
+| `/api/universe/{symbol}/readiness` | Bootstrap stage: 0=new → 3=ready |
+| `/api/trend/{symbol}` | Chart overlay data (BOS, CHoCH, FVG levels) |
+| `/api/execution/orders` | Submit `NormalizedOrderIntent` |
+| `/api/execution/from-signal` | Auto-derive intent from current trend |
+| `/api/system/killswitch` | Emergency stop toggle |
+
+### Frontend Notes
+
+- **`candle-chart.tsx`** must always use `dynamic` import with `ssr: false` — lightweight-charts does not support SSR.
+- All HTTP calls go through `frontend/src/lib/api.ts` (axios instance). Never add raw fetch calls.
+- TypeScript interfaces live in `frontend/src/lib/types.ts` — keep aligned with FastAPI response shapes.
+- Some pages are demo-mode surfaces, not live-backend-driven. Preserve that distinction when editing.
+- Run `npm run build` after any frontend change to catch type errors before committing.
+
+### Testing
+
+- Integration tests hit a real DB (SQLite in test env). No mocking the database layer.
+- `tests/test_api_backend.py` — full FastAPI integration tests
+- `tests/test_structural_walker.py`, `test_structure_levels.py`, `test_trend_id.py` — core logic
+- Execution, signal bridge, and integrations each have dedicated test files
+
+### In-Progress Areas (as of last checkpoint)
+
+- Must-break BOS validation during leg confirmation
+- CHoCH-triggered trend reset logic
+- Range detection via retracement-depth behavior
+- Trend channel lines
+- Frontend pages: scanner, market, universe, signals are live-driven; analytics/risk/radar are demo surfaces

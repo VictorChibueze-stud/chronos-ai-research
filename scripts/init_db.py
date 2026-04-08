@@ -7,12 +7,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.db.models import AlertZone, MonitoredSetup
-from src.db.session import Base, SessionLocal, engine
+from src.db.session import SessionLocal, init_db
 
 
 def main() -> None:
-    Path("data").mkdir(parents=True, exist_ok=True)
-    Base.metadata.create_all(bind=engine)
+    init_db()
 
     with SessionLocal() as db:
         db.query(AlertZone).delete()

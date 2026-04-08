@@ -1,16 +1,35 @@
 from collections.abc import Generator
+import os
+from pathlib import Path
 
-from sqlalchemy import create_engine, text
+from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
+# Load local .env so DATABASE_URL is available in dev shells.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
-DATABASE_URL = "sqlite:///data/chronos.db"
+
+_raw_db_url = os.getenv("DATABASE_URL")
+DATABASE_URL = (_raw_db_url or "").strip()
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is required. Set it in the environment, e.g. "
+        "postgresql+psycopg://user:pass@host:5432/dbname or sqlite:///./local.db"
+    )
 
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False},
-)
+def _create_engine(url: str) -> Engine:
+    kwargs: dict = {"pool_pre_ping": True}
+    if url.lower().startswith("sqlite"):
+        kwargs["connect_args"] = {"check_same_thread": False}
+    return create_engine(url, **kwargs)
+
+
+engine: Engine = _create_engine(DATABASE_URL)
+
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
@@ -18,59 +37,19 @@ class Base(DeclarativeBase):
     pass
 
 
-def _migrate_add_mtf_alignment() -> None:
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE monitored_setups ADD COLUMN mtf_alignment JSON"))
-    except Exception:
-        # Column already exists (or table not yet created in this process).
-        pass
+def _alembic_config():
+    from alembic.config import Config
 
-
-def _migrate_add_ema_signal() -> None:
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE monitored_setups ADD COLUMN ema_signal VARCHAR"))
-    except Exception:
-        # Column already exists (or table not yet created in this process).
-        pass
-
-
-def _cleanup_monitored_setups_safety_valve() -> None:
-    """Bound runaway growth from old scans before API routes are used.
-
-    If monitored_setups grows above 200 rows, trim it down to 150 by deleting
-    lowest-scoring rows first (and oldest id as tie-breaker).
-    """
-    try:
-        with engine.begin() as conn:
-            total = conn.execute(text("SELECT COUNT(*) FROM monitored_setups")).scalar() or 0
-            if int(total) <= 200:
-                return
-            conn.execute(
-                text(
-                    """
-                    DELETE FROM monitored_setups
-                    WHERE id IN (
-                        SELECT id
-                        FROM monitored_setups
-                        ORDER BY trend_score ASC, id DESC
-                        LIMIT :to_delete
-                    )
-                    """
-                ),
-                {"to_delete": int(total) - 150},
-            )
-    except Exception:
-        # Table may not exist yet during first boot, or cleanup may race startup.
-        pass
+    cfg = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
+    return cfg
 
 
 def init_db() -> None:
-    Base.metadata.create_all(bind=engine)
-    _migrate_add_mtf_alignment()
-    _migrate_add_ema_signal()
-    _cleanup_monitored_setups_safety_valve()
+    from alembic import command
+
+    import src.db.models  # noqa: F401 — register ORM tables (e.g. CandleCache)
+    command.upgrade(_alembic_config(), "head")
 
 
 def get_db() -> Generator:

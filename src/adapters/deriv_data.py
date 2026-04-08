@@ -13,6 +13,7 @@ import logging
 import math
 import os
 import pathlib
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -74,6 +75,20 @@ def _to_epoch_seconds(dt: Any) -> int:
 
 
 DERIV_WS_URL = "wss://ws.derivws.com/websockets/v3?app_id={app_id}"
+_MAX_DERIV_CANDLES_PER_REQUEST = 5000
+_RETRYABLE_DERIV_ERROR_CODES = {"RateLimit"}
+
+# Cap requested history for Deriv: synthetics often have shorter broker retention than YAML lookbacks.
+DERIV_MAX_LOOKBACK_DAYS: dict[str, float] = {
+    "5m": 30,
+    "15m": 60,
+    "30m": 90,
+    "1h": 365,
+    "4h": 730,
+    "1d": 2190,
+    "1w": 3650,
+    "1mo": 7300,
+}
 
 
 def fetch_deriv_ohlc(
@@ -110,42 +125,103 @@ def fetch_deriv_ohlc(
 		if "error" in auth_resp:
 			raise RuntimeError(f"Deriv authorization error: {auth_resp['error']}")
 
-		# request candles
-		req = {
-			"ticks_history": symbol_code,
-			"style": "candles",
-			"granularity": granularity_sec,
-			"start": start_epoch,
-			"end": end_epoch,
-		}
-		ws.send(json.dumps(req))
+		def _request_candles_page(page_end_epoch: int) -> Optional[List[Dict[str, Any]]]:
+			for attempt in range(1, 4):
+				try:
+					req = {
+						"ticks_history": symbol_code,
+						"style": "candles",
+						"granularity": granularity_sec,
+						"start": start_epoch,
+						"end": page_end_epoch,
+						"count": _MAX_DERIV_CANDLES_PER_REQUEST,
+					}
+					ws.send(json.dumps(req))
+					while True:
+						msg = json.loads(ws.recv())
+						if "error" in msg:
+							error_obj = msg["error"] or {}
+							error_code = error_obj.get("code")
+							logger.warning(
+								"Deriv page error symbol=%s granularity=%s start=%s end=%s code=%s detail=%s",
+								symbol_code,
+								granularity_sec,
+								start_epoch,
+								page_end_epoch,
+								error_code,
+								error_obj,
+							)
+							if error_code in _RETRYABLE_DERIV_ERROR_CODES:
+								raise RuntimeError(f"retryable_deriv_error:{error_code}")
+							raise RuntimeError(f"Deriv OHLC error: {error_obj}")
+						if "candles" in msg:
+							return msg.get("candles", [])
+				except (TimeoutError, websocket.WebSocketTimeoutException):
+					if attempt < 3:
+						time.sleep(1.0)
+						continue
+					logger.warning(
+						"Deriv fetch timed out after 3 retries: %s %ss end=%s",
+						symbol_code,
+						granularity_sec,
+						page_end_epoch,
+					)
+					return None
+				except RuntimeError as e:
+					if "retryable_deriv_error:RateLimit" in str(e):
+						if attempt < 3:
+							time.sleep(1.0)
+							continue
+						logger.warning(
+							"Deriv fetch rate-limited after 3 retries: %s %ss end=%s",
+							symbol_code,
+							granularity_sec,
+							page_end_epoch,
+						)
+						return None
+					raise
+				except Exception:
+					raise
+			return None
 
-		resp: Dict[str, Any] = {}
-		while True:
-			msg = json.loads(ws.recv())
-			if "error" in msg:
-				raise RuntimeError(f"Deriv OHLC error: {msg['error']}")
-			if "candles" in msg:
-				resp = msg
+		by_epoch: Dict[int, Dict[str, Any]] = {}
+		current_end = end_epoch
+		while current_end > start_epoch:
+			raw_candles = _request_candles_page(current_end)
+			if raw_candles is None:
+				break
+			if not raw_candles:
 				break
 
-		raw_candles: Sequence[Dict[str, Any]] = resp.get("candles", [])
-		if not raw_candles:
-			return []
-
-		rows: List[Dict[str, Any]] = []
-		for c in raw_candles:
-			rows.append(
-				{
-					"epoch": c.get("epoch"),
+			for c in raw_candles:
+				epoch = c.get("epoch")
+				if epoch is None:
+					continue
+				by_epoch[int(epoch)] = {
+					"epoch": epoch,
 					"open": c.get("open"),
 					"high": c.get("high"),
 					"low": c.get("low"),
 					"close": c.get("close"),
 					"volume": c.get("volume", 0.0),
 				}
-			)
 
+			if len(raw_candles) < _MAX_DERIV_CANDLES_PER_REQUEST:
+				break
+
+			oldest_epoch = raw_candles[0].get("epoch")
+			if oldest_epoch is None:
+				break
+			next_end = int(oldest_epoch) - 1
+			if next_end <= start_epoch:
+				break
+			current_end = next_end
+			time.sleep(0.2)
+
+		if not by_epoch:
+			return []
+
+		rows = [by_epoch[e] for e in sorted(by_epoch.keys())]
 		candles = normalize_candles(rows)
 		return candles
 
@@ -183,6 +259,8 @@ def _get_lookback_days(interval: str) -> float:
         "1h": 100.0,
         "4h": 365.0,
         "1d": 2190.0,
+        "1w": 3650.0,
+        "1mo": 7300.0,
     }
     return defaults.get(interval, 7.5)
 
@@ -277,10 +355,40 @@ def fetch_deriv_ohlc_sync(
     Raises:
         ValueError: If *interval* is not in :data:`INTERVAL_TO_GRANULARITY`.
     """
+    if interval in {"1w", "1mo"}:
+        logger.info("Deriv resample request symbol=%s interval=%s source=1d", symbol, interval)
+        lookback_days = _get_lookback_days(interval)
+        max_deriv_days = DERIV_MAX_LOOKBACK_DAYS.get(interval, lookback_days)
+        lookback_days = min(lookback_days, max_deriv_days)
+        now = datetime.now(timezone.utc)
+        start_dt = (
+            start_time
+            if start_time is not None
+            else datetime.fromtimestamp(now.timestamp() - lookback_days * 86400, tz=timezone.utc)
+        )
+        daily = fetch_deriv_ohlc_sync(
+            symbol,
+            "1d",
+            start_time=start_dt,
+            cfg=cfg,
+            active_symbols=active_symbols,
+            validate_active_symbol=validate_active_symbol,
+        )
+        bucket_days = 7 if interval == "1w" else 30
+        resampled = _resample_daily_candles(daily, bucket_days)
+        logger.info(
+            "Deriv resample completed symbol=%s interval=%s daily_count=%s resampled_count=%s",
+            symbol,
+            interval,
+            len(daily),
+            len(resampled),
+        )
+        return resampled
+
     if interval not in INTERVAL_TO_GRANULARITY:
         raise ValueError(
             f"Unsupported interval '{interval}'. "
-            f"Supported: {list(INTERVAL_TO_GRANULARITY.keys())}"
+            f"Supported: {list(INTERVAL_TO_GRANULARITY.keys()) + ['1w', '1mo']}"
         )
 
     if cfg is None:
@@ -292,7 +400,7 @@ def fetch_deriv_ohlc_sync(
     if validate_active_symbol:
         active = active_symbols if active_symbols is not None else _get_active_symbols_cached()
         if active and symbol not in active:
-            logger.warning(
+            logger.debug(
                 "Symbol '%s' not found in Deriv active symbols. Returning empty list.",
                 symbol,
             )
@@ -300,6 +408,8 @@ def fetch_deriv_ohlc_sync(
 
     granularity = INTERVAL_TO_GRANULARITY[interval]
     lookback_days = _get_lookback_days(interval)
+    max_deriv_days = DERIV_MAX_LOOKBACK_DAYS.get(interval, lookback_days)
+    lookback_days = min(lookback_days, max_deriv_days)
 
     now = datetime.now(timezone.utc)
     if start_time is not None:
@@ -334,6 +444,37 @@ def fetch_deriv_ohlc_sync(
     return candles
 
 
+def fetch_deriv_account_balance(
+    token: str,
+    *,
+    app_id: str | None = None,
+) -> Dict[str, Any]:
+    """Authorize and fetch Deriv account balance via WebSocket API."""
+    effective_app_id = app_id or os.getenv("DERIV_APP_ID", "1089")
+    ws = websocket.create_connection(
+        DERIV_WS_URL.format(app_id=effective_app_id),
+        timeout=15,
+    )
+    try:
+        ws.send(json.dumps({"authorize": token}))
+        auth_resp = json.loads(ws.recv())
+        if "error" in auth_resp:
+            raise RuntimeError(f"Deriv authorization error: {auth_resp['error']}")
+
+        ws.send(json.dumps({"balance": 1}))
+        bal_resp = json.loads(ws.recv())
+        if "error" in bal_resp:
+            raise RuntimeError(f"Deriv balance error: {bal_resp['error']}")
+        if "balance" not in bal_resp:
+            raise RuntimeError("Deriv balance response missing balance object")
+        return bal_resp
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+
 async def fetch_deriv_ohlc_async(
     symbol: str,
     interval: str,
@@ -350,4 +491,38 @@ async def fetch_deriv_ohlc_async(
         None,
         lambda: fetch_deriv_ohlc_sync(symbol, interval, start_time=start_time, cfg=cfg),
     )
+
+
+def _resample_daily_candles(candles: List[Candle], bucket_days: int) -> List[Candle]:
+    if not candles:
+        return []
+    ordered = sorted(candles, key=lambda c: c.timestamp)
+    out: List[Candle] = []
+    bucket: List[Candle] = []
+    for candle in ordered:
+        bucket.append(candle)
+        if len(bucket) >= bucket_days:
+            out.append(
+                Candle(
+                    timestamp=bucket[0].timestamp,
+                    open=bucket[0].open,
+                    high=max(c.high for c in bucket),
+                    low=min(c.low for c in bucket),
+                    close=bucket[-1].close,
+                    volume=sum(float(c.volume) for c in bucket),
+                )
+            )
+            bucket = []
+    if bucket:
+        out.append(
+            Candle(
+                timestamp=bucket[0].timestamp,
+                open=bucket[0].open,
+                high=max(c.high for c in bucket),
+                low=min(c.low for c in bucket),
+                close=bucket[-1].close,
+                volume=sum(float(c.volume) for c in bucket),
+            )
+        )
+    return out
 

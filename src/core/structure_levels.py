@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from src.core.choch_zone import compute_choch_zone
+
 
 def _opposite_break(close_price: float, level_price: float, trend_direction: str) -> bool:
     """Return True when close crosses the level opposite to the trend direction."""
@@ -48,10 +50,12 @@ def compute_bos_levels(candles: List[Any], legs: List[Dict[str, Any]]) -> List[D
         start_index = leg["end_index"]
         trend_direction = "down" if leg["end_price"] <= leg["start_price"] else "up"
         broken = False
+        break_index: Optional[int] = None
 
         for index in range(start_index + 1, len(candles)):
             if _opposite_break(candles[index].close, level_price, trend_direction):
                 broken = True
+                break_index = index
                 break
 
         bos_levels.append(
@@ -61,6 +65,7 @@ def compute_bos_levels(candles: List[Any], legs: List[Dict[str, Any]]) -> List[D
                 "end_index": int(last_index),
                 "broken": broken,
                 "trend_direction": trend_direction,
+                "break_index": break_index,
             }
         )
 
@@ -146,6 +151,9 @@ def compute_internal_structure_levels(candles: List[Any], legs: List[Dict[str, A
         for bos in internal_bos_levels:
             bos["start_index"] += parent_start
             bos["end_index"] = len(candles) - 1
+            bi = bos.get("break_index")
+            if bi is not None:
+                bos["break_index"] = int(bi) + parent_start
 
         if internal_choch_level is not None:
             internal_choch_level["start_index"] += parent_start
@@ -164,4 +172,58 @@ def compute_all_structure_levels(
     return {
         "bos_levels": compute_bos_levels(candles, legs),
         "choch_level": compute_choch_level(candles, legs, trend),
+    }
+
+
+def compute_last_impulse_internal_choch_zone(
+    candles: List[Any],
+    legs: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """CHoCH zone for the most recent confirmed global impulse's internal trend.
+
+    Returns a dict with zone bounds and global candle index for horizontal start,
+    or None if internal structure or zone is unavailable.
+    """
+    if not candles or not legs:
+        return None
+
+    confirmed_impulses = [
+        leg
+        for leg in legs
+        if (
+            leg.get("type") == "impulse"
+            and leg.get("confirmed") is True
+            and leg.get("end_index") is not None
+        )
+    ]
+    if not confirmed_impulses:
+        return None
+
+    leg = confirmed_impulses[-1]
+    internal = leg.get("internal_structure") or {}
+    internal_trend = internal.get("trend")
+    internal_legs = internal.get("legs") or []
+    if internal_trend not in {"up", "down"} or not internal_legs:
+        return None
+
+    zone = compute_choch_zone(internal_legs, internal_trend)
+    if zone is None:
+        return None
+
+    parent_start = int(leg["start_index"])
+    src_internal = int(zone["source_impulse_start_index"])
+    global_src = parent_start + src_internal
+    n = len(candles)
+    if global_src < 0 or global_src >= n:
+        return None
+
+    internal_choch_level = leg.get("internal_choch_level")
+    broken = bool(internal_choch_level.get("broken")) if isinstance(internal_choch_level, dict) else False
+
+    return {
+        "lower_boundary": float(zone["lower_boundary"]),
+        "upper_boundary": float(zone["upper_boundary"]),
+        "source_impulse_start_index_global": global_src,
+        "trend_direction": internal_trend,
+        "broken": broken,
     }

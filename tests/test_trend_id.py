@@ -13,23 +13,35 @@ def _make_candles(prices: list) -> list:
         ) for i, p in enumerate(prices)
     ]
 
+
+# Oscillating series where ANCHOR-TO-NOW (most recent significant extreme) still yields
+# multiple confirmed impulses — used for momentum / dominance filter tests.
+_MULTI_IMPULSE_PRICES_FOR_FILTERS = [
+    987, 960, 999, 972, 1002, 999, 966, 984, 960, 988, 1045, 1047, 1012, 967, 924, 973, 922, 919, 881,
+    936, 967, 963, 914, 957, 984, 1032, 1012, 1037, 1021, 1051, 999, 1009, 1018, 995, 1049, 1027, 1075,
+    1035, 1066, 1096, 1154, 1183, 1204, 1166, 1207, 1193,
+]
+
+
 def test_clear_downtrend():
     prices = [100, 98, 99, 96, 97, 93, 95, 90, 92, 88, 89, 85]
     # min_swing_candles=1 required because dataset is so small
     result = identify_trend(_make_candles(prices), min_swing_candles=1)
-    
+
     assert result["trend"] == "down"
-    assert len(result["legs"]) >= 2
+    assert result["trend_start"] is not None
+    assert result["trend_start"]["price"] > prices[-1]
     assert result["legs"][0]["type"] == "impulse"
-    assert result["legs"][0]["slope"] < 0
+
 
 def test_clear_uptrend():
     prices = [80, 82, 81, 85, 83, 88, 86, 92, 90, 95]
     result = identify_trend(_make_candles(prices), min_swing_candles=1)
-    
+
     assert result["trend"] == "up"
-    assert result["legs"][0]["slope"] is not None
-    assert result["legs"][0]["slope"] > 0
+    assert result["trend_start"] is not None
+    assert result["trend_start"]["price"] < prices[-1]
+    assert result["legs"][0]["type"] == "impulse"
 
 def test_flat_range():
     prices = [100, 101, 99, 100, 101, 99, 100, 101, 99, 100]
@@ -64,7 +76,7 @@ def test_parent_relative_filter_rejects_small_impulse():
 
 
 def test_momentum_filter_rejects_decaying_impulse():
-    prices = [1000, 1100, 1050, 1060, 1040, 1058, 1035, 1055, 1045, 1300]
+    prices = _MULTI_IMPULSE_PRICES_FOR_FILTERS
     base = identify_trend(_make_candles(prices), min_swing_candles=1)
     filtered = identify_trend(
         _make_candles(prices),
@@ -80,7 +92,7 @@ def test_momentum_filter_rejects_decaying_impulse():
 
 
 def test_dominance_filter_rejects_weak_impulse():
-    prices = [1000, 1100, 1060, 1080, 1040, 1090, 1050, 1080, 1060, 1300]
+    prices = _MULTI_IMPULSE_PRICES_FOR_FILTERS
     result = identify_trend(
         _make_candles(prices),
         min_swing_candles=1,
@@ -113,7 +125,7 @@ def test_all_filters_disabled_preserves_original_behaviour():
 
 
 def test_filters_are_independent():
-    prices = [1000, 1100, 1050, 1060, 1040, 1058, 1035, 1055, 1045, 1300]
+    prices = _MULTI_IMPULSE_PRICES_FOR_FILTERS
     baseline = identify_trend(_make_candles(prices), min_swing_candles=1)
     momentum_only = identify_trend(
         _make_candles(prices),

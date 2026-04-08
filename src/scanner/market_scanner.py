@@ -15,9 +15,11 @@ import yaml
 
 from src.adapters.binance_data import fetch_binance_ohlc_sync
 from src.adapters.deriv_data import fetch_deriv_ohlc_sync, get_active_deriv_symbols
+from src.adapters.yfinance_data import fetch_yfinance_ohlc_sync
 from src.core.leg_metrics import annotate_legs_with_metrics, summarise_leg_metrics
 from src.core.retracement_depth import annotate_legs_with_depth, summarise_retracement_depths
 from src.core.structure_levels import compute_all_structure_levels, compute_internal_structure_levels
+from src.core.filter_defaults import SCAN_AND_ANALYSIS_FILTER_DEFAULTS
 from src.core.trend_id import compute_internal_structure, identify_trend
 from src.scanner.universe import compute_correlation_groups
 
@@ -81,7 +83,7 @@ def _build_error_result(symbol: str, interval: str, error: str) -> Dict[str, Any
     return payload
 
 
-def fetch_top_symbols(n: int = 50) -> List[str]:
+def fetch_top_symbols(n: int = 350) -> List[str]:
     """Fetch top N USDT pairs by quote volume, excluding stablecoin bases."""
     response = requests.get(_BINANCE_24H_TICKER_URL, timeout=30)
     response.raise_for_status()
@@ -106,7 +108,14 @@ def fetch_top_symbols(n: int = 50) -> List[str]:
 
     top = sorted(filtered, key=lambda item: item[1], reverse=True)[:n]
     symbols = [symbol for symbol, _ in top]
-    print(f"Universe: top {n} USDT pairs by 24h volume fetched. {symbols}")
+    # Avoid print(): Windows cp1252 consoles raise UnicodeEncodeError when the
+    # top-N list includes non-ASCII symbol names (e.g. 币安人生USDT), which
+    # previously aborted discovery and dropped the entire Binance universe.
+    logger.info(
+        "Universe: fetched %d USDT pairs by 24h volume (requested cap=%d)",
+        len(symbols),
+        n,
+    )
     return symbols
 
 
@@ -114,12 +123,12 @@ def run_pipeline(
     symbol: str,
     interval: str,
     candles: List[Any],
-    use_parent_relative_filter: bool = False,
+    use_parent_relative_filter: bool = True,
     min_impulse_parent_ratio: float = 0.15,
-    use_momentum_filter: bool = False,
-    min_momentum_ratio: float = 0.3,
-    use_dominance_filter: bool = False,
-    min_dominance_ratio: float = 1.2,
+    use_momentum_filter: bool = True,
+    min_momentum_ratio: float = 0.5,
+    use_dominance_filter: bool = True,
+    min_dominance_ratio: float = 1.5,
 ) -> Dict[str, Any]:
     """Run full trend/structure/metrics pipeline and return a flat scanner payload."""
     try:
@@ -254,6 +263,9 @@ def run_scanner(
     # Deriv symbols are static (from config/symbols.yaml).
     binance_symbols = list(symbols)
     cfg = _load_symbols_config()
+    yfinance_symbols = sorted(
+        {str(s).strip().upper() for s in _section_values(cfg.get("yfinance", [])) if str(s).strip()}
+    )
     deriv_symbols = sorted(
         set(_section_values(cfg.get("deriv", {})))
         | set(DERIV_FOREX_SYMBOLS)
@@ -261,10 +273,13 @@ def run_scanner(
         | set(DERIV_INDICES_SYMBOLS)
     )
 
-    total_combinations = (len(binance_symbols) + len(deriv_symbols)) * len(intervals)
+    total_combinations = (
+        len(binance_symbols) + len(yfinance_symbols) + len(deriv_symbols)
+    ) * len(intervals)
     print(
-        f"Starting scan: {len(binance_symbols)} binance + {len(deriv_symbols)} deriv "
-        f"symbols × {len(intervals)} timeframes = {total_combinations} combinations."
+        f"Starting scan: {len(binance_symbols)} binance + {len(yfinance_symbols)} yfinance + "
+        f"{len(deriv_symbols)} deriv symbols × {len(intervals)} timeframes = "
+        f"{total_combinations} combinations."
     )
 
     # Deriv validation gate: call active symbol lookup once, drop missing symbols.
@@ -293,6 +308,17 @@ def run_scanner(
             except Exception as exc:
                 fetch_errors[(symbol, interval)] = str(exc)
 
+    for symbol in yfinance_symbols:
+        for interval in intervals:
+            try:
+                candles = fetch_yfinance_ohlc_sync(symbol, interval)
+                if candles:
+                    symbol_candle_map[(symbol, interval)] = candles
+                else:
+                    fetch_errors[(symbol, interval)] = "empty candle list"
+            except Exception as exc:
+                fetch_errors[(symbol, interval)] = str(exc)
+
     # Fetch loop: validated Deriv symbols use Deriv adapter.
     for symbol in validated_deriv_symbols:
         for interval in intervals:
@@ -305,6 +331,8 @@ def run_scanner(
             except Exception as exc:
                 fetch_errors[(symbol, interval)] = str(exc)
 
+    merged_filter = {**SCAN_AND_ANALYSIS_FILTER_DEFAULTS, **filter_config}
+
     # Core analysis loop over fetched candles.
     for (symbol, interval), candles in symbol_candle_map.items():
         combo_start = time.perf_counter()
@@ -313,15 +341,15 @@ def run_scanner(
             interval,
             candles,
             use_parent_relative_filter=bool(
-                filter_config.get("use_parent_relative_filter", False)
+                merged_filter.get("use_parent_relative_filter", True)
             ),
             min_impulse_parent_ratio=float(
-                filter_config.get("min_impulse_parent_ratio", 0.15)
+                merged_filter.get("min_impulse_parent_ratio", 0.15)
             ),
-            use_momentum_filter=bool(filter_config.get("use_momentum_filter", False)),
-            min_momentum_ratio=float(filter_config.get("min_momentum_ratio", 0.3)),
-            use_dominance_filter=bool(filter_config.get("use_dominance_filter", False)),
-            min_dominance_ratio=float(filter_config.get("min_dominance_ratio", 1.2)),
+            use_momentum_filter=bool(merged_filter.get("use_momentum_filter", True)),
+            min_momentum_ratio=float(merged_filter.get("min_momentum_ratio", 0.5)),
+            use_dominance_filter=bool(merged_filter.get("use_dominance_filter", True)),
+            min_dominance_ratio=float(merged_filter.get("min_dominance_ratio", 1.5)),
         )
         rows.append(row)
 
