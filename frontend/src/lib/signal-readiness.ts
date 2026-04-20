@@ -7,16 +7,24 @@ import type { Setup } from "@/lib/types";
 
 export type ReadinessFilter = "ALL" | "FULL" | "PARTIAL" | "EARLY";
 
-export type FilterAssetClass = "ALL" | "CRYPTO" | "FOREX" | "SYNTHETIC" | "COMMODITY";
+export type FilterAssetClass =
+  | "ALL"
+  | "CRYPTO"
+  | "FOREX"
+  | "SYNTHETIC"
+  | "COMMODITY"
+  | "EQUITIES"
+  | "INDICES";
 
-/** INDICES and unknown classes map to null — visible only when asset filter is ALL. */
-export function normalizeAssetClassForFilter(category: string | undefined): FilterAssetClass | "INDICES" | null {
+/** Unknown classes map to null — visible only when asset filter is ALL. */
+export function normalizeAssetClassForFilter(category: string | undefined): FilterAssetClass | null {
   const c = String(category || "").toLowerCase();
   if (c === "crypto") return "CRYPTO";
   if (c === "forex") return "FOREX";
   if (c === "synthetic") return "SYNTHETIC";
   if (c === "commodity" || c === "commodities") return "COMMODITY";
   if (c === "indices" || c === "index") return "INDICES";
+  if (c === "equities" || c === "stocks") return "EQUITIES";
   return null;
 }
 
@@ -101,6 +109,52 @@ export function selectTop50Setups(setups: Setup[]): Setup[] {
     return String(a.symbol).localeCompare(String(b.symbol));
   });
   return copy.slice(0, 50);
+}
+
+export type UniverseKey = "multi_asset" | "synthetic" | "crypto";
+
+/**
+ * Mirror of src/api/routers/setups.py::_infer_universe for rows whose
+ * backend `universe` column is null (legacy pre-backfill data).
+ */
+function inferUniverseClient(setup: Setup): string {
+  const sym = (setup.symbol ?? "").toUpperCase();
+  if (sym.endsWith("USDT") || sym.endsWith("BTC")) return "crypto";
+  const SYNTH = ["R_", "1HZ", "BOOM", "CRASH", "JD", "OTC_", "STEP", "WLD", "RB"];
+  if (SYNTH.some((p) => sym.startsWith(p))) return "synthetic";
+  if ((setup.category ?? "") === "synthetic") return "synthetic";
+  if ((setup.category ?? "") === "crypto") return "crypto";
+  return "multi_asset";
+}
+
+/**
+ * Top-N setups within a single universe (or across all when `universe === "all"`).
+ * Sort key matches `selectTop50Setups`: universe_rank asc (nulls last),
+ * then trend_score desc, then symbol asc.
+ */
+export function selectTopNByUniverse(
+  setups: Setup[],
+  universe: UniverseKey | "all",
+  n: number = 50,
+): Setup[] {
+  const filtered =
+    universe === "all"
+      ? setups
+      : setups.filter((s) => (s.universe ?? inferUniverseClient(s)) === universe);
+  const copy = [...filtered];
+  copy.sort((a, b) => {
+    const ar = a.universe_rank;
+    const br = b.universe_rank;
+    const aHas = ar != null && Number.isFinite(Number(ar));
+    const bHas = br != null && Number.isFinite(Number(br));
+    if (aHas && bHas) return Number(ar) - Number(br);
+    if (aHas && !bHas) return -1;
+    if (!aHas && bHas) return 1;
+    const sc = b.trend_score - a.trend_score;
+    if (sc !== 0) return sc;
+    return String(a.symbol).localeCompare(String(b.symbol));
+  });
+  return copy.slice(0, n);
 }
 
 export function depthBadgeLabel(depth: number): string {

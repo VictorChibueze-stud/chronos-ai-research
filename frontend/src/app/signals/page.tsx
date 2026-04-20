@@ -18,9 +18,10 @@ import {
   depthBadgeLabel,
   normalizeAssetClassForFilter,
   normalizeTrend,
-  selectTop50Setups,
+  selectTopNByUniverse,
   type FilterAssetClass,
   type ReadinessFilter,
+  type UniverseKey,
 } from "@/lib/signal-readiness";
 import type { Setup } from "@/lib/types";
 
@@ -272,8 +273,9 @@ function PipelineStrip({ row, flags }: { row: SignalRow; flags: ReturnType<typeo
 function SignalBoardContent() {
   const router = useRouter();
   const [trendFilter, setTrendFilter] = useState<"ALL" | "LONG" | "SHORT">("ALL");
-  const [assetClassFilter, setAssetClassFilter] = useState<FilterAssetClass | "ALL">("ALL");
+  const [assetClassFilter, setAssetClassFilter] = useState<FilterAssetClass>("ALL");
   const [readinessFilter, setReadinessFilter] = useState<ReadinessFilter>("ALL");
+  const [universeFilter, setUniverseFilter] = useState<UniverseKey | "all">("all");
   const [stateDrawerSymbol, setStateDrawerSymbol] = useState<string | null>(null);
 
   const setupsQuery = useQuery({
@@ -282,9 +284,9 @@ function SignalBoardContent() {
     refetchInterval: 30_000,
   });
 
-  const { top50Rows, summary, filteredRows } = useMemo(() => {
+  const { summary, filteredRows } = useMemo(() => {
     const raw = setupsQuery.data ?? [];
-    const top50 = selectTop50Setups(raw);
+    const top50 = selectTopNByUniverse(raw, universeFilter, 50);
     const rows = normalizeSignalRows(top50);
 
     let full = 0;
@@ -309,7 +311,7 @@ function SignalBoardContent() {
       if (trendFilter === "LONG" && row.trend !== "up") return false;
       if (trendFilter === "SHORT" && row.trend !== "down") return false;
       if (assetClassFilter !== "ALL") {
-        if (row.asset_bucket === null || row.asset_bucket === "INDICES") return false;
+        if (row.asset_bucket === null) return false;
         if (row.asset_bucket !== assetClassFilter) return false;
       }
       if (readinessFilter === "FULL" && met !== 5) return false;
@@ -319,16 +321,23 @@ function SignalBoardContent() {
     });
 
     return {
-      top50Rows: enriched,
       summary: { full, partial, waiting },
       filteredRows: filtered,
     };
-  }, [setupsQuery.data, trendFilter, assetClassFilter, readinessFilter]);
+  }, [setupsQuery.data, trendFilter, assetClassFilter, readinessFilter, universeFilter]);
 
   const hasError = setupsQuery.isError;
   const freshnessLabel = formatFreshness(setupsQuery.dataUpdatedAt);
 
-  const ASSET_PILLS: (FilterAssetClass | "ALL")[] = ["ALL", "CRYPTO", "FOREX", "SYNTHETIC", "COMMODITY"];
+  const ASSET_PILLS: FilterAssetClass[] = [
+    "ALL",
+    "CRYPTO",
+    "FOREX",
+    "SYNTHETIC",
+    "COMMODITY",
+    "EQUITIES",
+    "INDICES",
+  ];
 
   return (
     <div
@@ -369,7 +378,10 @@ function SignalBoardContent() {
             SIGNAL BOARD
           </h1>
           <p style={{ margin: "8px 0 0", fontSize: 10, letterSpacing: "0.1em", color: "#787B86", fontWeight: 500 }}>
-            TOP 50 BY RANK WHEN PRESENT, ELSE BY SCORE — STRATEGY READINESS
+            {universeFilter === "all"
+              ? "TOP 50 ACROSS ALL UNIVERSES"
+              : `TOP 50 · ${universeFilter.toUpperCase().replace("_", "-")} UNIVERSE`}
+            {" · STRATEGY READINESS"}
           </p>
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, textAlign: "right" }}>
@@ -380,7 +392,7 @@ function SignalBoardContent() {
             rightSlot={<LiveStatusMeta>{freshnessLabel}</LiveStatusMeta>}
           />
           <LiveStatusMeta dim>
-            SHOWING {filteredRows.length} / {top50Rows.length}
+            SHOWING {filteredRows.length}
           </LiveStatusMeta>
         </div>
       </div>
@@ -416,6 +428,23 @@ function SignalBoardContent() {
           marginBottom: 14,
         }}
       >
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 9, color: "#787B86", letterSpacing: "0.12em", minWidth: 56 }}>UNIVERSE</span>
+          {(
+            [
+              { key: "all", label: "ALL", tooltip: "Show top signals across all universes" },
+              { key: "multi_asset", label: "MULTI-ASSET", tooltip: "Forex, indices, commodities, equities" },
+              { key: "synthetic", label: "SYNTHETIC", tooltip: "Deriv synthetic indices only" },
+              { key: "crypto", label: "CRYPTO", tooltip: "Binance crypto pairs only" },
+            ] as const
+          ).map(({ key, label, tooltip }) => (
+            <Tooltip key={key} content={tooltip}>
+              <button type="button" onClick={() => setUniverseFilter(key)} style={pillStyle(universeFilter === key)}>
+                {label}
+              </button>
+            </Tooltip>
+          ))}
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 9, color: "#787B86", letterSpacing: "0.12em", minWidth: 56 }}>TREND</span>
           {(["ALL", "LONG", "SHORT"] as const).map((key) => (
