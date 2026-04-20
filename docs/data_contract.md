@@ -1,9 +1,9 @@
 # Data Contract: Ikenga Engine Output
 
-**Version:** 1.0  
-**Owner:** Product Engineer  
-**Consumer:** System Architect / Orchestrator Layer  
-**Status:** Draft for Review
+**Version:** 1.1
+**Owner:** Product Engineer
+**Consumer:** Orchestrator Layer / API / Frontend
+**Status:** Active
 
 ---
 
@@ -289,12 +289,30 @@ The Product Engineer will implement `trend_score` once the formula is agreed.
 
 ---
 
-## 6. Open Questions for Architect
+## 6. Resolved decisions
 
-1. What is the scan frequency? How often does the engine re-run per asset?
-2. What is the `trend_score` formula? PE needs this to implement scoring.
-3. Should mitigated CHoCH zones be stored in the database at all, or only
-   the active deepest zone?
-4. When a new depth level is detected on the next scan cycle, how does the
-   Orchestrator handle the transition — does it create new `AlertZone` rows
-   or update existing ones?
+The following were originally open questions and have since been settled
+in implementation:
+
+1. **Scan frequency.** The market scanner runs on a 4-hour cadence
+   across the full Binance + Deriv universe. Per-symbol re-analysis can
+   also be triggered on demand via `POST /api/setups/scan` or
+   `GET /api/analysis/{symbol}`.
+
+2. **`trend_score` formula.** Materialized on the `MonitoredSetup` row
+   (see migration `20260409_0010_monitored_setup_scoring_fields`). It
+   combines depth-level count, mitigation count, deepest active zone
+   proximity, and structural quality. Scoring lives in
+   `src/scanner/universe_ranking.py`; the formula is intentionally
+   tunable rather than fixed in this contract.
+
+3. **Mitigated CHoCH storage.** All depth-level CHoCH zones are
+   persisted for audit and UI replay, but only the deepest unmitigated
+   zone is marked `is_active: true`. Higher-depth mitigated zones stay
+   on the row as `is_active: false`.
+
+4. **Depth transitions.** On the next scan cycle, the orchestrator
+   diffs the new walker output against the persisted `structural_state_json`.
+   New depth levels become new `AlertZone` rows; superseded zones are
+   marked inactive in place. Rows protected by
+   `is_manual_override=True` are never modified by the diff.

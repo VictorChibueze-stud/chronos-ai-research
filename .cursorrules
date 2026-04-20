@@ -1,0 +1,53 @@
+# Cursor rules for IKENGA
+
+## What this project is
+
+IKENGA is a multi-timeframe trend-following research system for Deriv and Binance that encodes a discretionary trading strategy into deterministic Python, with optional LLM reasoning for market context.
+
+## Protected files — do not touch under any circumstances
+
+- `src/core/trend_id.py` — Trend identification engine; any change requires manual verification
+- `src/core/structural_walker.py` — Recursive depth resolution; bugs cascade through multi-level analysis
+- `src/core/choch_zone.py` — CHoCH zone and proximity computation; core to signal validity
+- `src/core/structure_levels.py` — BOS/CHoCH level extraction and right-edge extension
+- `src/core/retracement_analysis.py` — Retracement structural analysis; critical for internal structure
+- `src/backtest/engine.py` — Backtest loop and order simulation; deterministic output validation depends on it
+- `config/timeframe_windows.yaml` — Canonical lookback windows; changes affect all indicators globally
+- `src/adapters/deriv_data.py` — Deriv adapter; must stay consistent with cache contract
+- `src/adapters/binance_data.py` — Binance adapter; must stay consistent with cache contract
+
+## Rules
+
+- **Never modify protected files.** If a change to trading logic is needed, describe the issue in chat and wait for human instruction.
+- **Never move or rename core modules without explicit instruction.** The import graph is tight; refactoring breaks tests and API contracts.
+- **Never add new dependencies without asking first.** This is a research system; dependency bloat reduces reproducibility.
+- **Trading logic lives in `src/core/` only.** Never put trade decisions in UI, API layers, or LLM prompts. Core functions are pure; they take candles and parameters and return deterministic results.
+- **All candle data must go through the cache layer.** Never call broker APIs directly from signal logic. Use `src/cache/candle_store.py` → `get_candles(symbol, timeframe, db)`.
+- **Trend identification is scoring-based, not PIP-based.** Impulse size is relative to retracement and prior impulses. Do not revert to absolute price thresholds.
+- **CHoCH requires ≥2 confirmed impulses** before a zone is valid. A single impulse has no CHoCH.
+- **BOS and CHoCH levels extend to chart right edge** for visualization. Do not truncate at the last confirmed impulse.
+- **LLM layer consumes structured snapshots, never does market math.** All numeric calculations happen in Python tools (`src/llm/tools.py`), not in prompts.
+- **EMA crossover markers inside internal retracements are intentionally suppressed.** Do not remove this filtering without understanding historical decisions.
+- **Retracement depth is preferred over Fibonacci** in the current pipeline. Use percentage of impulse size, not golden ratios.
+- **Keep the separation between adapters and core.** Broker-specific code stays in `src/adapters/`. Core is broker-agnostic.
+- **All core functions must be pure and stateless.** No I/O, no side effects, no external API calls inside `src/core/`.
+- **Configuration is data, not code.** Tunable parameters go to `config/` YAML files, not hardcoded into functions.
+- **Database layer uses real SQLite (no mocks).** Integration tests hit an actual database for reproducibility.
+- **Notebooks are research surfaces.** Restart kernel and run all cells before validating conclusions. Assume no out-of-order execution.
+
+## Tech stack and conventions
+
+- **Python:** 3.10+ (async/await, type hints, f-strings)
+- **Backend:** FastAPI 0.100+, SQLAlchemy 2.0+, Pydantic v2
+- **Frontend:** Next.js 16+, React 19, TailwindCSS v4, TypeScript strict mode
+- **Database:** SQLite (test/dev), PostgreSQL (optional scaling)
+- **Testing:** pytest with real DB (no mocks on data layer)
+- **Data:** pandas, numpy; candles normalized to `Candle` namedtuple or Pydantic model
+- **Indicators:** EMA, RSI, ATR, Stochastic computed in `src/core/features.py`
+- **File naming:** snake_case for modules and functions; PascalCase for classes
+- **Imports:** Relative imports within `src/` (e.g., `from src.core.trend_id import identify_trend`)
+- **Candle structure:** timestamp (UTC), open, high, low, close, volume
+- **Leg dict keys:** type, start_price, end_price, start_index, end_index, confirmed, slope
+- **Trend values:** "up", "down", "range"
+- **Direction:** "long", "short", "unknown"
+- **Timeframe format:** "1d", "4h", "1h", "30m", "15m", "5m" (lowercase, no colon)

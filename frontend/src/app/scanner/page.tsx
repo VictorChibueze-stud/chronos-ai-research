@@ -11,8 +11,10 @@ import { ScannerTableSkeleton } from "@/components/ui/page-skeleton";
 import { RelativeTimeWithTooltip } from "@/components/ui/relative-time";
 import { Tooltip } from "@/components/ui/tooltip";
 import { formatLocaleInt, formatScore } from "@/lib/format-display";
-import type { ScanJobLog, ScanSettings, Setup, UniverseRankingStatus } from "@/lib/types";
+import { MarketStateBadge, MarketStateDrawer } from "@/components/market-state-badge";
+import type { PaperTrade, ScanJobLog, ScanSettings, Setup, UniverseRankingStatus, UniverseSettings } from "@/lib/types";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const SCAN_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "EURUSD", "XAUUSD"];
 const SCAN_TIMEFRAME = "1h";
 const SCAN_SETTINGS_PANEL_STORAGE_KEY = "ikenga.scanSettingsPanelCollapsed";
@@ -341,13 +343,51 @@ function formatUniverseRank(rank: number | null | undefined): { text: string; co
 
 // ── Main Component ────────────────────────────────────────────────────────
 
-const CATEGORIES = ["All", "Forex", "Crypto", "Commodities", "Indices", "Synthetic"];
+type UniverseKey = "multi_asset" | "synthetic" | "crypto";
+
+const SYNTHETIC_PREFIXES_FRONTEND = [
+  "R_", "1HZ", "BOOM", "CRASH", "JD",
+  "OTC_", "STEP", "WLD", "RB", "RDBULL", "STPRNG",
+];
+
+function _inferUniverseFrontend(symbol: string, category: string): UniverseKey {
+  const sym = (symbol || "").toUpperCase();
+  if (sym.endsWith("USDT") || sym.endsWith("BTC")) return "crypto";
+  if (SYNTHETIC_PREFIXES_FRONTEND.some((p) => sym.startsWith(p))) return "synthetic";
+  const c = (category || "").toLowerCase();
+  if (c === "synthetic") return "synthetic";
+  if (c === "crypto") return "crypto";
+  return "multi_asset";
+}
+
+const UNIVERSE_TABS: Array<{ key: UniverseKey; label: string; icon: string }> = [
+  { key: "multi_asset", label: "MULTI-ASSET", icon: "◈" },
+  { key: "synthetic", label: "SYNTHETIC", icon: "⬡" },
+  { key: "crypto", label: "CRYPTO", icon: "₿" },
+];
+
+const UNIVERSE_CATEGORIES: Record<UniverseKey, string[]> = {
+  multi_asset: ["All", "Forex", "Indices", "Commodities", "Equities"],
+  synthetic: ["All", "Synthetic"],
+  crypto: ["All", "Crypto"],
+};
+
+const RANK_BUTTON_LABELS: Record<UniverseKey, string> = {
+  multi_asset: "RANK MARKETS",
+  synthetic: "RANK SYNTHETIC",
+  crypto: "RANK CRYPTO",
+};
+
+const UNIVERSE_RANK_FREQUENCY_OPTIONS = ["hourly", "daily", "weekly", "monthly"] as const;
+const UNIVERSE_REFRESH_HOUR_OPTIONS = [1, 2, 4, 8, 12, 24] as const;
+
+const CATEGORIES = ["All", "Forex", "Crypto", "Commodities", "Indices", "Synthetic", "Equities"];
 const BROKER_FILTER_OPTIONS = ["ALL", "BINANCE", "DERIV"] as const;
 const STATE_FILTER_OPTIONS = ["ALL", "MONITORING", "SCANNING"] as const;
 const DEPTH_FILTER_OPTIONS: DepthFilterOption[] = ["ALL DEPTHS", "DEPTH 1+", "DEPTH 2+", "DEPTH 3"];
 const SCANNER_FILTER_STORAGE_KEY = "scanner:filters:v1";
 const SCANNER_VIEW_STORAGE_KEY = "ikenga.scanner.view";
-const DERIV_CATEGORIES = ["forex", "synthetic", "commodity", "indices", "crypto", "stocks", "etfs"] as const;
+const MARKET_CATEGORIES = ["forex", "synthetic", "commodity", "indices", "crypto", "equities", "stocks", "etfs"] as const;
 
 const SCAN_SETTINGS_FONT = "'IBM Plex Mono', monospace" as const;
 
@@ -378,17 +418,13 @@ const scanSettingsHintStyle: CSSProperties = {
   lineHeight: 1.35,
 };
 
-function clampUnitWeight(n: number): number {
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(1, n));
-}
-
 const DEFAULT_CATEGORY_MIN_SLOTS: ScanSettings["category_min_slots"] = {
   forex: 5,
   commodity: 3,
   indices: 3,
   synthetic: 5,
   crypto: 0,
+  equities: 0,
 };
 
 const CATEGORY_MIN_ROWS: { key: keyof ScanSettings["category_min_slots"]; label: string }[] = [
@@ -397,6 +433,7 @@ const CATEGORY_MIN_ROWS: { key: keyof ScanSettings["category_min_slots"]; label:
   { key: "indices", label: "INDICES" },
   { key: "synthetic", label: "SYNTHETIC" },
   { key: "crypto", label: "CRYPTO" },
+  { key: "equities", label: "EQUITIES" },
 ];
 
 const DEFAULT_SCAN_SETTINGS: ScanSettings = {
@@ -406,15 +443,32 @@ const DEFAULT_SCAN_SETTINGS: ScanSettings = {
   include_symbols: [],
   exclude_symbols: [],
   score_weights: { price_ratio_weight: 0.7, bar_ratio_weight: 0.3 },
+  scoring_profile: "balanced",
+  scoring_layer_weights: {
+    state_weight: 0.5,
+    opportunity_weight: 0.35,
+    structure_weight: 0.15,
+  },
   retracement_bonus: 10,
   deriv_category_overrides: {},
   universe_scan_frequency: "daily",
   active_refresh_hours: 4,
+  deep_analysis_refresh_hours: 24,
+  non_top50_analysis_depth: "global_and_prime",
   category_min_slots: { ...DEFAULT_CATEGORY_MIN_SLOTS },
 };
 
 const UNIVERSE_SCAN_FREQUENCIES: ScanSettings["universe_scan_frequency"][] = ["hourly", "daily", "weekly", "monthly"];
 const ACTIVE_REFRESH_HOUR_OPTIONS: ScanSettings["active_refresh_hours"][] = [1, 2, 4, 8, 12, 24];
+const DEEP_ANALYSIS_REFRESH_OPTIONS = [4, 8, 12, 24, 48, 72] as const;
+const NON_TOP50_DEPTH_OPTIONS: { value: string; label: string }[] = [
+  { value: "global_only", label: "Global only" },
+  { value: "global_and_prime", label: "Global + Prime" },
+  { value: "global_prime_walker", label: "Global + Prime + Walker" },
+  { value: "full_chain", label: "Full chain" },
+];
+
+const SCORING_PROFILE_OPTIONS = ["aggressive", "balanced", "conservative"] as const;
 
 function parseSymbolText(value: string): string[] {
   const seen = new Set<string>();
@@ -434,6 +488,33 @@ function parseBinanceTopNDraft(draft: string, fallback: number): number {
   return Math.max(10, Math.min(1000, base));
 }
 
+function OpenPaperTradeBadge({ trade }: { trade: PaperTrade }) {
+  const isLong = trade.direction === "long" || trade.direction === "up";
+  const arrow = isLong ? "\u25B2" : "\u25BC";
+  const hasPnl = trade.pnl_usd != null && Number.isFinite(trade.pnl_usd);
+  const pnl = trade.pnl_usd ?? 0;
+  const color =
+    !hasPnl ? "#7B61FF" : pnl === 0 ? "#7B61FF" : pnl > 0 ? "#00C853" : "#FF1744";
+  const text = !hasPnl ? `${arrow} OPEN` : `${pnl >= 0 ? "+" : "-"}$${Math.abs(pnl).toFixed(2)}`;
+  return (
+    <div
+      style={{
+        flexShrink: 0,
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: 9,
+        letterSpacing: "0.04em",
+        padding: "2px 6px",
+        background: "rgba(123,97,255,0.15)",
+        border: "1px solid #7B61FF",
+        color,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {text}
+    </div>
+  );
+}
+
 function normalizeCategory(cat: string | undefined): string {
   if (!cat) return "unknown";
   const c = cat.toLowerCase();
@@ -442,6 +523,7 @@ function normalizeCategory(cat: string | undefined): string {
   if (c === "synthetic") return "Synthetic";
   if (c === "commodity") return "Commodities";
   if (c === "indices" || c === "index") return "Indices";
+  if (c === "equities" || c === "equity" || c === "stocks") return "Equities";
   return "Forex";
 }
 
@@ -461,6 +543,7 @@ function ScannerContent() {
   const [isTriggeringRank, setIsTriggeringRank] = useState(false);
   const [rankingJustCompleted, setRankingJustCompleted] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [yfinanceRefreshNotice, setYfinanceRefreshNotice] = useState<string | null>(null);
   const initialCategory = searchParams.get("category");
   const initialSort = searchParams.get("sort");
   const [category, setCategory] = useState(
@@ -477,6 +560,7 @@ function ScannerContent() {
   const [minScore, setMinScore] = useState<number>(0);
   const [listView, setListView] = useState<"table" | "card">("table");
   const [droppingSymbol, setDroppingSymbol] = useState<string | null>(null);
+  const [stateDrawerSymbol, setStateDrawerSymbol] = useState<string | null>(null);
   const [scanSettings, setScanSettings] = useState<ScanSettings>(DEFAULT_SCAN_SETTINGS);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -487,6 +571,156 @@ function ScannerContent() {
   const [topNDraft, setTopNDraft] = useState(String(DEFAULT_SCAN_SETTINGS.binance_top_n));
   const [scanSettingsPanelCollapsed, setScanSettingsPanelCollapsed] = useState(false);
   const universeRankBusy = isTriggeringRank || rankingPollActive;
+  const [openTradesMap, setOpenTradesMap] = useState<Map<string, PaperTrade>>(new Map());
+  const [symbolsWithOverrides, setSymbolsWithOverrides] = useState<Set<string>>(new Set());
+
+  const [activeUniverse, setActiveUniverse] = useState<UniverseKey>("multi_asset");
+  const [universeSettings, setUniverseSettings] = useState<UniverseSettings[]>([]);
+  const [universeSettingsTab, setUniverseSettingsTab] = useState<UniverseKey>("multi_asset");
+  const [universeSettingsDraft, setUniverseSettingsDraft] = useState<Partial<UniverseSettings>>({});
+  const [universeSettingsSaving, setUniverseSettingsSaving] = useState(false);
+  const [universeSettingsNotice, setUniverseSettingsNotice] = useState<"saved" | "failed" | null>(null);
+  const [tradingBroker, setTradingBroker] = useState<string>("FTMO");
+
+  useEffect(() => {
+    api.getUniverses()
+      .then((u) => setUniverseSettings(u))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem("trading_broker");
+    if (stored && stored.trim().length > 0) {
+      setTradingBroker(stored);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const u = params.get("universe");
+    if (u === "multi_asset" || u === "synthetic" || u === "crypto") {
+      setActiveUniverse(u);
+      setUniverseSettingsTab(u);
+    }
+  }, []);
+
+  const handleUniverseChange = useCallback((u: UniverseKey) => {
+    setActiveUniverse(u);
+    setUniverseSettingsTab(u);
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    params.set("universe", u);
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}?${params.toString()}`,
+    );
+  }, []);
+
+  const handleTradingBrokerChange = useCallback((value: string) => {
+    setTradingBroker(value);
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem("trading_broker", value);
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
+
+  const currentUniverseRow = universeSettings.find(
+    (u) => u.universe_name === universeSettingsTab,
+  );
+
+  useEffect(() => {
+    if (currentUniverseRow) {
+      setUniverseSettingsDraft({
+        capacity: currentUniverseRow.capacity,
+        rank_frequency: currentUniverseRow.rank_frequency,
+        refresh_interval_hours: currentUniverseRow.refresh_interval_hours,
+      });
+    } else {
+      setUniverseSettingsDraft({});
+    }
+    setUniverseSettingsNotice(null);
+  }, [universeSettingsTab, currentUniverseRow?.capacity, currentUniverseRow?.rank_frequency, currentUniverseRow?.refresh_interval_hours]);
+
+  const handleSaveUniverseSettings = useCallback(async () => {
+    if (!currentUniverseRow) return;
+    setUniverseSettingsSaving(true);
+    setUniverseSettingsNotice(null);
+    try {
+      const payload: Partial<UniverseSettings> = {};
+      if (universeSettingsDraft.capacity != null && universeSettingsDraft.capacity !== currentUniverseRow.capacity) {
+        payload.capacity = Number(universeSettingsDraft.capacity);
+      }
+      if (universeSettingsDraft.rank_frequency != null && universeSettingsDraft.rank_frequency !== currentUniverseRow.rank_frequency) {
+        payload.rank_frequency = String(universeSettingsDraft.rank_frequency);
+      }
+      if (
+        universeSettingsDraft.refresh_interval_hours != null &&
+        universeSettingsDraft.refresh_interval_hours !== currentUniverseRow.refresh_interval_hours
+      ) {
+        payload.refresh_interval_hours = Number(universeSettingsDraft.refresh_interval_hours);
+      }
+      if (Object.keys(payload).length === 0) {
+        setUniverseSettingsNotice("saved");
+        return;
+      }
+      await api.updateUniverse(currentUniverseRow.universe_name, payload);
+      const refreshed = await api.getUniverses();
+      setUniverseSettings(refreshed);
+      setUniverseSettingsNotice("saved");
+    } catch {
+      setUniverseSettingsNotice("failed");
+    } finally {
+      setUniverseSettingsSaving(false);
+    }
+  }, [currentUniverseRow, universeSettingsDraft]);
+
+  useEffect(() => {
+    setCategory("All");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeUniverse]);
+
+  useEffect(() => {
+    api
+      .getPaperTrades({ status: "open", limit: 100 })
+      .then((trades) => {
+        const map = new Map<string, PaperTrade>();
+        trades.forEach((t) => map.set(t.symbol.toUpperCase(), t));
+        setOpenTradesMap(map);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (setups.length === 0) return;
+    let cancelled = false;
+    Promise.allSettled(
+      setups.map((s) =>
+        api.getManualStructureOverrides(s.symbol).then((list) => ({
+          symbol: s.symbol,
+          hasOverride: list.some((o) => o.is_active),
+        })),
+      ),
+    ).then((results) => {
+      if (cancelled) return;
+      const withOverrides = new Set<string>();
+      results.forEach((r) => {
+        if (r.status === "fulfilled" && r.value.hasOverride) {
+          withOverrides.add(r.value.symbol);
+        }
+      });
+      setSymbolsWithOverrides(withOverrides);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setups.length]);
 
   useEffect(() => {
     setTopNDraft(String(scanSettings.binance_top_n));
@@ -676,10 +910,14 @@ function ScannerContent() {
         include_symbols: parseSymbolText(includeInput),
         exclude_symbols: parseSymbolText(excludeInput),
         score_weights: { ...scanSettings.score_weights },
+        scoring_profile: scanSettings.scoring_profile,
+        scoring_layer_weights: { ...scanSettings.scoring_layer_weights },
         retracement_bonus: scanSettings.retracement_bonus,
         enable_correlation_filter: Boolean(withCorr.enable_correlation_filter),
         universe_scan_frequency: scanSettings.universe_scan_frequency,
         active_refresh_hours: scanSettings.active_refresh_hours,
+        deep_analysis_refresh_hours: scanSettings.deep_analysis_refresh_hours,
+        non_top50_analysis_depth: scanSettings.non_top50_analysis_depth,
         category_min_slots: { ...scanSettings.category_min_slots },
         deriv_category_overrides: { ...scanSettings.deriv_category_overrides },
       } as ScanSettings;
@@ -725,7 +963,7 @@ function ScannerContent() {
     setIsTriggeringRank(true);
     setError(null);
     try {
-      await api.triggerUniverseRanking();
+      await api.rankUniverseSpecific(activeUniverse);
       const s = await api.getUniverseRankingStatus();
       setUniverseRankingStatus(s);
       if (s.in_progress) {
@@ -825,7 +1063,15 @@ function ScannerContent() {
     return () => clearInterval(countdownInterval);
   }, [health?.next_scan]);
 
-  const filtered = setups
+  const filteredByUniverse = setups.filter((s) => {
+    const u = (s.universe as UniverseKey | null | undefined) ||
+      _inferUniverseFrontend(s.symbol, s.category);
+    return u === activeUniverse;
+  });
+
+  const availableCategories = UNIVERSE_CATEGORIES[activeUniverse] ?? ["All"];
+
+  const filtered = filteredByUniverse
     .filter((s) => category === "All" || normalizeCategory(s.category) === category)
     .filter((s) => {
       if (stateFilter === "ALL") return true;
@@ -843,9 +1089,9 @@ function ScannerContent() {
         : String(a.symbol || "").localeCompare(String(b.symbol || "")),
     );
 
-  const highConviction = setups.filter(s => s.trend_score >= 30).length;
-  const inRetracement = setups.filter(s => s.fsm_state === "MONITORING").length;
-  const inImpulse = setups.filter(s => s.fsm_state !== "MONITORING" && s.current_phase === "impulse").length;
+  const highConviction = filteredByUniverse.filter(s => s.trend_score >= 30).length;
+  const inRetracement = filteredByUniverse.filter(s => s.fsm_state === "MONITORING").length;
+  const inImpulse = filteredByUniverse.filter(s => s.fsm_state !== "MONITORING" && s.current_phase === "impulse").length;
   const derivedLastScan = setups.length > 0
     ? formatTime(setups.reduce((a, b) => new Date(a.last_checked_at) > new Date(b.last_checked_at) ? a : b).last_checked_at)
     : "--:--";
@@ -910,7 +1156,7 @@ function ScannerContent() {
                   RANKING...
                 </>
               ) : (
-                "RANK UNIVERSE"
+                RANK_BUTTON_LABELS[activeUniverse] ?? "RANK"
               )}
             </button>
           </Tooltip>
@@ -996,16 +1242,19 @@ function ScannerContent() {
             transition: "grid-template-rows 280ms ease",
           }}
         >
-          <div style={{ minHeight: 0, overflow: "hidden" }}>
+          <div style={{ minHeight: 0 }}>
             <div
               id="scanner-scan-settings"
               className="scanner-scan-settings-panel"
               style={{
                 padding: "10px 20px 12px",
                 opacity: scanSettingsPanelCollapsed ? 0 : 1,
-                transition: "opacity 200ms ease",
                 pointerEvents: scanSettingsPanelCollapsed ? "none" : "auto",
                 fontFamily: SCAN_SETTINGS_FONT,
+                maxHeight: scanSettingsPanelCollapsed ? 0 : "min(70vh, 600px)",
+                overflowY: "auto",
+                overflowX: "hidden",
+                transition: "opacity 200ms ease, max-height 280ms ease",
               }}
               aria-hidden={scanSettingsPanelCollapsed}
             >
@@ -1045,6 +1294,19 @@ function ScannerContent() {
                 @media (max-width: 900px) {
                   .scanner-scan-settings-grid { grid-template-columns: 1fr !important; }
                 }
+                .scanner-scan-settings-panel::-webkit-scrollbar {
+                  width: 4px;
+                }
+                .scanner-scan-settings-panel::-webkit-scrollbar-track {
+                  background: transparent;
+                }
+                .scanner-scan-settings-panel::-webkit-scrollbar-thumb {
+                  background: #2A2E39;
+                  border-radius: 2px;
+                }
+                .scanner-scan-settings-panel::-webkit-scrollbar-thumb:hover {
+                  background: #363A45;
+                }
               `}</style>
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <div
@@ -1053,7 +1315,9 @@ function ScannerContent() {
                 >
                   <div style={{ display: "grid", gap: 10 }}>
                     <label style={{ display: "grid", gap: 6 }}>
-                      <span style={scanSettingsFieldLabelStyle}>TOP N SYMBOLS</span>
+                      <Tooltip content="Maximum symbols fetched from Binance by 24h volume before scoring">
+                        <span style={{ ...scanSettingsFieldLabelStyle, cursor: "help" }}>TOP N SYMBOLS</span>
+                      </Tooltip>
                       <input
                         type="text"
                         inputMode="numeric"
@@ -1100,7 +1364,18 @@ function ScannerContent() {
                     </div>
                   </div>
                   <div style={{ display: "grid", gap: 10 }}>
-                    <div style={scanSettingsFieldLabelStyle}>DERIV CATEGORIES</div>
+                    <div style={scanSettingsFieldLabelStyle}>MARKET CATEGORIES</div>
+                    <div
+                      style={{
+                        fontSize: 8,
+                        color: "#4A4D58",
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        letterSpacing: "0.06em",
+                        marginBottom: 4,
+                      }}
+                    >
+                      Filter which Deriv market types enter the scan universe
+                    </div>
                     <div
                       style={{
                         display: "grid",
@@ -1108,7 +1383,7 @@ function ScannerContent() {
                         gap: 6,
                       }}
                     >
-                      {DERIV_CATEGORIES.map((cat) => {
+                      {MARKET_CATEGORIES.map((cat) => {
                         const active = scanSettings.deriv_categories.includes(cat);
                         return (
                           <button
@@ -1176,51 +1451,127 @@ function ScannerContent() {
                   </div>
                   <div style={{ display: "grid", gap: 10 }}>
                     <div style={scanSettingsFieldLabelStyle}>SCORING</div>
-                    <label style={{ display: "grid", gap: 6 }}>
-                      <span style={scanSettingsFieldLabelStyle}>PRICE WEIGHT</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        value={scanSettings.score_weights.price_ratio_weight}
-                        onChange={(e) => {
-                          const price = clampUnitWeight(Number(e.target.value));
-                          setScanSettings((s) => ({
-                            ...s,
-                            score_weights: {
-                              price_ratio_weight: Number(price.toFixed(2)),
-                              bar_ratio_weight: Number((1 - price).toFixed(2)),
-                            },
-                          }));
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {SCORING_PROFILE_OPTIONS.map((profile) => {
+                        const active = scanSettings.scoring_profile === profile;
+                        return (
+                          <button
+                            key={profile}
+                            type="button"
+                            onClick={() => setScanSettings((s) => ({ ...s, scoring_profile: profile }))}
+                            style={{
+                              padding: "4px 10px",
+                              fontSize: 10,
+                              letterSpacing: "0.08em",
+                              fontFamily: SCAN_SETTINGS_FONT,
+                              fontWeight: active ? 700 : 400,
+                              border: `1px solid ${active ? "#F5A623" : "#363A45"}`,
+                              borderRadius: 0,
+                              background: active ? "#F5A623" : "#1E222D",
+                              color: active ? "#0D0F14" : "#787B86",
+                              cursor: "pointer",
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            {profile}
+                          </button>
+                        );
+                      })}
+                      <button
+                        type="button"
+                        onClick={() => setScanSettings((s) => ({ ...s, scoring_profile: "custom" }))}
+                        style={{
+                          padding: "4px 10px",
+                          fontSize: 10,
+                          letterSpacing: "0.08em",
+                          fontFamily: SCAN_SETTINGS_FONT,
+                          fontWeight: scanSettings.scoring_profile === "custom" ? 700 : 400,
+                          border: `1px solid ${scanSettings.scoring_profile === "custom" ? "#F5A623" : "#363A45"}`,
+                          borderRadius: 0,
+                          background: scanSettings.scoring_profile === "custom" ? "#F5A623" : "#1E222D",
+                          color: scanSettings.scoring_profile === "custom" ? "#0D0F14" : "#787B86",
+                          cursor: "pointer",
+                          textTransform: "uppercase",
                         }}
-                        style={{ ...scanSettingsInputBase, width: "100%", boxSizing: "border-box" }}
-                      />
-                    </label>
+                      >
+                        CUSTOM
+                      </button>
+                    </div>
+                    {scanSettings.scoring_profile === "custom" ? (
+                      <>
+                        <label style={{ display: "grid", gap: 6 }}>
+                          <span style={scanSettingsFieldLabelStyle}>STATE WEIGHT</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            value={scanSettings.scoring_layer_weights.state_weight}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              if (!Number.isFinite(v)) return;
+                              setScanSettings((s) => ({
+                                ...s,
+                                scoring_layer_weights: {
+                                  ...s.scoring_layer_weights,
+                                  state_weight: v,
+                                },
+                              }));
+                            }}
+                            style={{ ...scanSettingsInputBase, width: "100%", boxSizing: "border-box" }}
+                          />
+                        </label>
+                        <label style={{ display: "grid", gap: 6 }}>
+                          <span style={scanSettingsFieldLabelStyle}>OPPORTUNITY WEIGHT</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            value={scanSettings.scoring_layer_weights.opportunity_weight}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              if (!Number.isFinite(v)) return;
+                              setScanSettings((s) => ({
+                                ...s,
+                                scoring_layer_weights: {
+                                  ...s.scoring_layer_weights,
+                                  opportunity_weight: v,
+                                },
+                              }));
+                            }}
+                            style={{ ...scanSettingsInputBase, width: "100%", boxSizing: "border-box" }}
+                          />
+                        </label>
+                        <label style={{ display: "grid", gap: 6 }}>
+                          <span style={scanSettingsFieldLabelStyle}>STRUCTURE WEIGHT</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            value={scanSettings.scoring_layer_weights.structure_weight}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              if (!Number.isFinite(v)) return;
+                              setScanSettings((s) => ({
+                                ...s,
+                                scoring_layer_weights: {
+                                  ...s.scoring_layer_weights,
+                                  structure_weight: v,
+                                },
+                              }));
+                            }}
+                            style={{ ...scanSettingsInputBase, width: "100%", boxSizing: "border-box" }}
+                          />
+                        </label>
+                        <div style={scanSettingsHintStyle}>Weights are normalised automatically</div>
+                      </>
+                    ) : null}
                     <label style={{ display: "grid", gap: 6 }}>
-                      <span style={scanSettingsFieldLabelStyle}>VELOCITY WEIGHT</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        value={scanSettings.score_weights.bar_ratio_weight}
-                        onChange={(e) => {
-                          const bar = clampUnitWeight(Number(e.target.value));
-                          setScanSettings((s) => ({
-                            ...s,
-                            score_weights: {
-                              bar_ratio_weight: Number(bar.toFixed(2)),
-                              price_ratio_weight: Number((1 - bar).toFixed(2)),
-                            },
-                          }));
-                        }}
-                        style={{ ...scanSettingsInputBase, width: "100%", boxSizing: "border-box" }}
-                      />
-                    </label>
-                    <div style={scanSettingsHintStyle}>Weights are normalised — must sum to 1.0</div>
-                    <label style={{ display: "grid", gap: 6 }}>
-                      <span style={scanSettingsFieldLabelStyle}>RETRACEMENT BONUS</span>
+                      <Tooltip content="Additive bonus points for markets currently in retracement phase">
+                        <span style={{ ...scanSettingsFieldLabelStyle, cursor: "help" }}>RETRACEMENT BONUS</span>
+                      </Tooltip>
                       <input
                         type="number"
                         min={0}
@@ -1234,9 +1585,46 @@ function ScannerContent() {
                 </div>
 
                 <div style={{ display: "flex", flexDirection: "column", gap: 12, width: "100%" }}>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await fetch(`${API_BASE}/api/setups/refresh-yfinance-candles`, { method: "POST" });
+                      setYfinanceRefreshNotice("YFINANCE CANDLE REFRESH STARTED");
+                      setTimeout(() => setYfinanceRefreshNotice(null), 4000);
+                    }}
+                    style={{
+                      padding: "6px 14px",
+                      fontSize: 10,
+                      letterSpacing: "0.08em",
+                      textTransform: "uppercase",
+                      background: "#1E222D",
+                      border: "1px solid #363A45",
+                      color: "#D1D4DC",
+                      cursor: "pointer",
+                      fontFamily: '"IBM Plex Mono", monospace',
+                      justifySelf: "start",
+                    }}
+                  >
+                    REFRESH YFINANCE CANDLES
+                  </button>
+                  {yfinanceRefreshNotice && (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        fontSize: 9,
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        color: "#26A69A",
+                        letterSpacing: "0.08em",
+                      }}
+                    >
+                      ● {yfinanceRefreshNotice}
+                    </div>
+                  )}
                   <div style={scanSettingsFieldLabelStyle}>SCAN SCHEDULE</div>
                   <div style={{ display: "grid", gap: 8 }}>
-                    <span style={scanSettingsFieldLabelStyle}>UNIVERSE SCAN</span>
+                    <Tooltip content="How often the full universe is re-scored and top N promoted">
+                      <span style={{ ...scanSettingsFieldLabelStyle, cursor: "help", display: "inline-block" }}>UNIVERSE SCAN</span>
+                    </Tooltip>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
                       {UNIVERSE_SCAN_FREQUENCIES.map((freq) => {
                         const active = scanSettings.universe_scan_frequency === freq;
@@ -1266,7 +1654,9 @@ function ScannerContent() {
                     </div>
                   </div>
                   <div style={{ display: "grid", gap: 8 }}>
-                    <span style={scanSettingsFieldLabelStyle}>ACTIVE REFRESH</span>
+                    <Tooltip content="How often top N setups recompute candidate impulse and market state">
+                      <span style={{ ...scanSettingsFieldLabelStyle, cursor: "help", display: "inline-block" }}>ACTIVE REFRESH</span>
+                    </Tooltip>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
                       {ACTIVE_REFRESH_HOUR_OPTIONS.map((h) => {
                         const active = scanSettings.active_refresh_hours === h;
@@ -1295,11 +1685,72 @@ function ScannerContent() {
                       })}
                     </div>
                   </div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <Tooltip content="How often global structure, prime impulse, and walker recompute">
+                      <span style={{ ...scanSettingsFieldLabelStyle, cursor: "help", display: "inline-block" }}>DEEP ANALYSIS REFRESH</span>
+                    </Tooltip>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                      {DEEP_ANALYSIS_REFRESH_OPTIONS.map((h) => {
+                        const active = scanSettings.deep_analysis_refresh_hours === h;
+                        const label = `${h}H`;
+                        return (
+                          <button
+                            key={h}
+                            type="button"
+                            onClick={() => setScanSettings((s) => ({ ...s, deep_analysis_refresh_hours: h }))}
+                            style={{
+                              padding: "4px 12px",
+                              fontSize: 10,
+                              letterSpacing: "0.08em",
+                              fontFamily: SCAN_SETTINGS_FONT,
+                              fontWeight: active ? 700 : 400,
+                              border: `1px solid ${active ? "#F5A623" : "#363A45"}`,
+                              borderRadius: 0,
+                              background: active ? "#F5A623" : "#1E222D",
+                              color: active ? "#0D0F14" : "#787B86",
+                              cursor: "pointer",
+                            }}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <span style={scanSettingsFieldLabelStyle}>NON-TOP-N DEPTH</span>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                      {NON_TOP50_DEPTH_OPTIONS.map(({ value, label }) => {
+                        const active = scanSettings.non_top50_analysis_depth === value;
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => setScanSettings((s) => ({ ...s, non_top50_analysis_depth: value }))}
+                            style={{
+                              padding: "4px 12px",
+                              fontSize: 10,
+                              letterSpacing: "0.08em",
+                              fontFamily: SCAN_SETTINGS_FONT,
+                              fontWeight: active ? 700 : 400,
+                              border: `1px solid ${active ? "#F5A623" : "#363A45"}`,
+                              borderRadius: 0,
+                              background: active ? "#F5A623" : "#1E222D",
+                              color: active ? "#0D0F14" : "#787B86",
+                              cursor: "pointer",
+                            }}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
 
                 <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%" }}>
                   <div style={scanSettingsFieldLabelStyle}>CATEGORY MINIMUMS</div>
-                  <div style={scanSettingsHintStyle}>Minimum guaranteed slots in top 50</div>
+                  <div style={scanSettingsHintStyle}>Minimum guaranteed slots per universe scan</div>
                   <div
                     style={{
                       display: "grid",
@@ -1340,6 +1791,180 @@ function ScannerContent() {
                       </Fragment>
                     ))}
                   </div>
+                </div>
+
+                <div
+                  style={{
+                    borderTop: "1px solid #1E222D",
+                    paddingTop: 12,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontFamily: SCAN_SETTINGS_FONT,
+                      fontSize: 9,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.12em",
+                      color: "#787B86",
+                    }}
+                  >
+                    UNIVERSE SETTINGS
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {UNIVERSE_TABS.map((tab) => (
+                      <button
+                        key={`uni-edit-tab-${tab.key}`}
+                        type="button"
+                        onClick={() => setUniverseSettingsTab(tab.key)}
+                        style={{
+                          padding: "4px 10px",
+                          fontSize: 9,
+                          letterSpacing: "0.08em",
+                          fontFamily: SCAN_SETTINGS_FONT,
+                          fontWeight: universeSettingsTab === tab.key ? 700 : 400,
+                          border: `1px solid ${universeSettingsTab === tab.key ? "#F5A623" : "#363A45"}`,
+                          background: universeSettingsTab === tab.key ? "#F5A623" : "#1E222D",
+                          color: universeSettingsTab === tab.key ? "#0D0F14" : "#787B86",
+                          cursor: "pointer",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                  {currentUniverseRow ? (
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr 1fr 1fr auto",
+                        gap: 10,
+                        alignItems: "end",
+                      }}
+                    >
+                      <label style={{ display: "grid", gap: 6 }}>
+                        <span style={scanSettingsFieldLabelStyle}>CAPACITY</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={1000}
+                          value={universeSettingsDraft.capacity ?? currentUniverseRow.capacity}
+                          onChange={(e) => {
+                            const n = parseInt(e.target.value, 10);
+                            setUniverseSettingsDraft((d) => ({
+                              ...d,
+                              capacity: Number.isFinite(n) ? Math.max(1, Math.min(1000, n)) : d.capacity,
+                            }));
+                          }}
+                          style={{ ...scanSettingsInputBase, width: "100%", boxSizing: "border-box" }}
+                        />
+                      </label>
+                      <label style={{ display: "grid", gap: 6 }}>
+                        <span style={scanSettingsFieldLabelStyle}>RANK FREQUENCY</span>
+                        <select
+                          value={universeSettingsDraft.rank_frequency ?? currentUniverseRow.rank_frequency}
+                          onChange={(e) =>
+                            setUniverseSettingsDraft((d) => ({
+                              ...d,
+                              rank_frequency: e.target.value,
+                            }))
+                          }
+                          style={{ ...scanSettingsInputBase, width: "100%", boxSizing: "border-box" }}
+                        >
+                          {UNIVERSE_RANK_FREQUENCY_OPTIONS.map((opt) => (
+                            <option key={opt} value={opt} style={{ background: "#131722", color: "#D1D4DC" }}>
+                              {opt.toUpperCase()}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label style={{ display: "grid", gap: 6 }}>
+                        <span style={scanSettingsFieldLabelStyle}>REFRESH (HOURS)</span>
+                        <select
+                          value={String(universeSettingsDraft.refresh_interval_hours ?? currentUniverseRow.refresh_interval_hours)}
+                          onChange={(e) =>
+                            setUniverseSettingsDraft((d) => ({
+                              ...d,
+                              refresh_interval_hours: parseInt(e.target.value, 10),
+                            }))
+                          }
+                          style={{ ...scanSettingsInputBase, width: "100%", boxSizing: "border-box" }}
+                        >
+                          {UNIVERSE_REFRESH_HOUR_OPTIONS.map((opt) => (
+                            <option key={opt} value={opt} style={{ background: "#131722", color: "#D1D4DC" }}>
+                              {opt}h
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveUniverseSettings()}
+                        disabled={universeSettingsSaving}
+                        style={{
+                          padding: "8px 14px",
+                          fontFamily: SCAN_SETTINGS_FONT,
+                          fontSize: 10,
+                          letterSpacing: "0.1em",
+                          textTransform: "uppercase",
+                          border: "1px solid #F5A623",
+                          background: "transparent",
+                          color: "#F5A623",
+                          cursor: universeSettingsSaving ? "not-allowed" : "pointer",
+                          opacity: universeSettingsSaving ? 0.5 : 1,
+                          borderRadius: 0,
+                        }}
+                      >
+                        {universeSettingsSaving ? "SAVING..." : "SAVE"}
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ ...scanSettingsHintStyle, color: "#4A4D58" }}>
+                      Universe settings unavailable — backend may not be reachable.
+                    </div>
+                  )}
+                  {universeSettingsNotice === "saved" ? (
+                    <div
+                      style={{
+                        fontFamily: SCAN_SETTINGS_FONT,
+                        fontSize: 9,
+                        color: "#F5A623",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.06em",
+                      }}
+                    >
+                      UNIVERSE SETTINGS SAVED
+                    </div>
+                  ) : null}
+                  {universeSettingsNotice === "failed" ? (
+                    <div
+                      style={{
+                        fontFamily: SCAN_SETTINGS_FONT,
+                        fontSize: 9,
+                        color: "#EF5350",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.06em",
+                      }}
+                    >
+                      UNIVERSE SAVE FAILED
+                    </div>
+                  ) : null}
+                  <label style={{ display: "grid", gap: 6, marginTop: 4 }}>
+                    <span style={scanSettingsFieldLabelStyle}>TRADING BROKER</span>
+                    <input
+                      type="text"
+                      value={tradingBroker}
+                      onChange={(e) => handleTradingBrokerChange(e.target.value)}
+                      placeholder="FTMO"
+                      style={{ ...scanSettingsInputBase, width: "100%", boxSizing: "border-box" }}
+                    />
+                    <span style={scanSettingsHintStyle}>
+                      Multi-Asset Broker (display only)
+                    </span>
+                  </label>
                 </div>
 
                 <button
@@ -1384,9 +2009,66 @@ function ScannerContent() {
         </div>
       </div>
 
+      {/* Universe Tab Bar */}
+      <div
+        style={{
+          display: "flex",
+          gap: 0,
+          borderBottom: "1px solid #1E222D",
+          background: "#0D0F14",
+          padding: "0 20px",
+          alignItems: "center",
+        }}
+      >
+        {UNIVERSE_TABS.map((tab) => (
+          <button
+            key={`universe-tab-${tab.key}`}
+            type="button"
+            onClick={() => handleUniverseChange(tab.key)}
+            style={{
+              padding: "12px 20px",
+              background: "transparent",
+              border: "none",
+              borderBottom: activeUniverse === tab.key
+                ? "2px solid #F5A623"
+                : "2px solid transparent",
+              color: activeUniverse === tab.key ? "#F5A623" : "#4A4D58",
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              transition: "color 0.1s, border-color 0.1s",
+            }}
+          >
+            <span style={{ fontSize: 12 }}>{tab.icon}</span>
+            {tab.label}
+          </button>
+        ))}
+        {activeUniverse === "multi_asset" && (
+          <span
+            style={{
+              marginLeft: 12,
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 8,
+              color: "#4A4D58",
+              letterSpacing: "0.08em",
+              padding: "2px 8px",
+              border: "1px solid #1E222D",
+              borderRadius: 2,
+            }}
+          >
+            BROKER: {tradingBroker}
+          </span>
+        )}
+      </div>
+
       {/* KPI Strip */}
       <div style={{ display: "flex", padding: "16px 0", borderBottom: "1px solid var(--border-default)", background: "var(--bg-surface)" }}>
-        <MetricBlock label="ACTIVE SETUPS" value={formatLocaleInt(setups.length)} color="var(--text-primary)" />
+        <MetricBlock label="ACTIVE SETUPS" value={formatLocaleInt(filteredByUniverse.length)} color="var(--text-primary)" />
         <MetricBlock label="HIGH CONVICTION" value={formatLocaleInt(highConviction)} />
         <MetricBlock label="IN RETRACEMENT" value={formatLocaleInt(inRetracement)} />
         <MetricBlock label="IN IMPULSE" value={formatLocaleInt(inImpulse)} />
@@ -1425,7 +2107,7 @@ function ScannerContent() {
         <div style={{ display: "flex", flexDirection: "column" }}>
           <span style={filterLabelStyle}>CATEGORY</span>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {CATEGORIES.map((cat) => (
+            {availableCategories.map((cat) => (
               <FilterPill
                 key={`category-${cat}`}
                 active={category === cat}
@@ -1657,6 +2339,7 @@ function ScannerContent() {
             }
             const marketHref = `/market?${marketParams.toString()}`;
             const isDropping = droppingSymbol === symbol;
+            const openPaper = openTradesMap.get(symbol.toUpperCase());
             return (
               <div
                 key={`setup-${setup.setup_id}`}
@@ -1688,14 +2371,16 @@ function ScannerContent() {
                     width: 3,
                     height: "100%",
                     marginLeft: 0,
-                    background:
-                      setup.fsm_state === "MONITORING" && setup.current_phase === "retracement"
+                    background: openPaper
+                      ? "#7B61FF"
+                      : setup.fsm_state === "MONITORING" && setup.current_phase === "retracement"
                         ? "#F5A623"
                         : setup.current_phase === "impulse"
                           ? "#26A69A"
                           : "#1E222D",
-                    boxShadow:
-                      setup.fsm_state === "MONITORING" && setup.current_phase === "retracement"
+                    boxShadow: openPaper
+                      ? "2px 0 8px rgba(123,97,255,0.35)"
+                      : setup.fsm_state === "MONITORING" && setup.current_phase === "retracement"
                         ? "2px 0 8px rgba(245,166,35,0.4)"
                         : setup.current_phase === "impulse"
                           ? "2px 0 8px rgba(38,166,154,0.4)"
@@ -1719,22 +2404,76 @@ function ScannerContent() {
                     />
                   )}
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "0.02em" }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "0.02em", display: "inline-flex", alignItems: "center" }}>
+                      {symbolsWithOverrides.has(symbol) && (
+                        <span
+                          title="Manual override active"
+                          style={{
+                            width: 5,
+                            height: 5,
+                            borderRadius: "50%",
+                            background: "#F5A623",
+                            display: "inline-block",
+                            marginRight: 4,
+                            flexShrink: 0,
+                          }}
+                        />
+                      )}
                       {symbol}
                     </div>
-                    <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 1 }}>
-                      {String(normalizeCategory(setup.category) || "").toUpperCase()}
+                    {setup.category === "equities" &&
+                      setup.display_name &&
+                      setup.display_name !== setup.symbol && (
+                        <div
+                          style={{
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 8,
+                            color: "#4A4D58",
+                            letterSpacing: "0.06em",
+                            marginTop: 2,
+                          }}
+                        >
+                          {setup.display_name}
+                        </div>
+                      )}
+                    <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 1, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <span>{String(normalizeCategory(setup.category) || "").toUpperCase()}</span>
+                      {setup.sector && (
+                        <span
+                          style={{
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 7,
+                            letterSpacing: "0.08em",
+                            color: "#787B86",
+                            border: "1px solid #2A2E39",
+                            padding: "1px 5px",
+                            borderRadius: 2,
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {setup.sector}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
                 <div>
                   <DirectionTag direction={direction} />
                 </div>
-                <div>
-                  <PhaseBadge phase={phase} />
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                >
+                  <MarketStateBadge
+                    state={setup.market_state ?? setup.fsm_state ?? "WAITING"}
+                    onClick={() => setStateDrawerSymbol(setup.symbol)}
+                  />
                 </div>
-                <div>
-                  <TrendScoreDisplay value={setup.trend_score} />
+                <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <TrendScoreDisplay value={setup.trend_score} />
+                  </div>
+                  {openPaper ? <OpenPaperTradeBadge trade={openPaper} /> : null}
                 </div>
                 <div>
                   <DepthBadge depth={setup.pullback_depth || 0} />
@@ -1800,6 +2539,7 @@ function ScannerContent() {
               const marketHref = `/market?${marketParams.toString()}`;
               const isDropping = droppingSymbol === symbol;
               const depth = setup.pullback_depth || 0;
+              const openPaper = openTradesMap.get(symbol.toUpperCase());
               return (
                 <div
                   key={`card-${setup.setup_id}`}
@@ -1814,6 +2554,7 @@ function ScannerContent() {
                   }}
                   style={{
                     border: "1px solid var(--border-subtle)",
+                    borderLeft: openPaper ? "3px solid #7B61FF" : undefined,
                     background: setup.fsm_state === "MONITORING" ? "rgba(245,166,35,0.04)" : "var(--bg-elevated)",
                     padding: 12,
                     cursor: "pointer",
@@ -1823,9 +2564,58 @@ function ScannerContent() {
                   }}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "0.02em" }}>
-                      {symbol}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "0.02em", display: "inline-flex", alignItems: "center" }}>
+                        {symbolsWithOverrides.has(symbol) && (
+                          <span
+                            title="Manual override active"
+                            style={{
+                              width: 5,
+                              height: 5,
+                              borderRadius: "50%",
+                              background: "#F5A623",
+                              display: "inline-block",
+                              marginRight: 4,
+                              flexShrink: 0,
+                            }}
+                          />
+                        )}
+                        {symbol}
+                      </div>
+                      {setup.sector && (
+                        <span
+                          style={{
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 7,
+                            letterSpacing: "0.08em",
+                            color: "#787B86",
+                            border: "1px solid #2A2E39",
+                            padding: "1px 5px",
+                            borderRadius: 2,
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {setup.sector}
+                        </span>
+                      )}
+                      {openPaper ? <OpenPaperTradeBadge trade={openPaper} /> : null}
                     </div>
+                    {setup.category === "equities" &&
+                      setup.display_name &&
+                      setup.display_name !== setup.symbol && (
+                        <div
+                          style={{
+                            width: "100%",
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 8,
+                            color: "#4A4D58",
+                            letterSpacing: "0.06em",
+                            marginTop: -4,
+                          }}
+                        >
+                          {setup.display_name}
+                        </div>
+                      )}
                     <Tooltip content="Remove this setup from scanner">
                       <button
                         type="button"
@@ -1854,7 +2644,12 @@ function ScannerContent() {
                   </div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                     <DirectionTag direction={direction} />
-                    <PhaseBadge phase={phase} />
+                    <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                      <MarketStateBadge
+                        state={setup.market_state ?? setup.fsm_state ?? "WAITING"}
+                        onClick={() => setStateDrawerSymbol(setup.symbol)}
+                      />
+                    </div>
                   </div>
                   <ScoreBar value={setup.trend_score} />
                   <div
@@ -1979,6 +2774,12 @@ function ScannerContent() {
           </div>
         </div>
       )}
+      <MarketStateDrawer
+        symbol={stateDrawerSymbol ?? ""}
+        state={setups.find(s => s.symbol === stateDrawerSymbol)?.market_state ?? "WAITING"}
+        isOpen={stateDrawerSymbol !== null}
+        onClose={() => setStateDrawerSymbol(null)}
+      />
     </div>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { ReactNode } from "react";
+import type { CSSProperties } from "react";
 
 interface TooltipProviderProps {
   children: ReactNode;
@@ -12,13 +13,14 @@ interface TooltipProps {
   children: ReactNode;
   /** Wider, wrapping bubble for long text (e.g. signal waiting_for). */
   multiline?: boolean;
+  bubbleStyle?: CSSProperties;
 }
 
 export function TooltipProvider({ children }: TooltipProviderProps) {
   return <>{children}</>;
 }
 
-export function Tooltip({ content, children, multiline }: TooltipProps) {
+export function Tooltip({ content, children, multiline, bubbleStyle }: TooltipProps) {
   const [visible, setVisible] = useState(false);
 
   return (
@@ -49,6 +51,7 @@ export function Tooltip({ content, children, multiline }: TooltipProps) {
           opacity: visible ? 1 : 0,
           transition: "opacity 120ms ease",
           zIndex: 40,
+          ...bubbleStyle,
         }}
       >
         {content}

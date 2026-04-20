@@ -53,10 +53,15 @@ def test_post_apply_schedule_with_running_app():
             assert r.status_code == 200
             body = r.json()
             assert body["ok"] is True
-            assert "universe_scan_frequency" in body
-            assert "active_refresh_hours" in body
-            assert len(body["jobs"]) == 2
+            assert len(body["jobs"]) == 6
             ids = {j["job_id"] for j in body["jobs"]}
-            assert ids == {"universe_ranking_daily_utc", "active_refresh_every_4h"}
+            assert ids == {
+                "rank_multi_asset",
+                "refresh_multi_asset",
+                "rank_synthetic",
+                "refresh_synthetic",
+                "rank_crypto",
+                "refresh_crypto",
+            }
     finally:
         app.dependency_overrides.clear()

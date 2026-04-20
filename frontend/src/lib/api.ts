@@ -1,4 +1,5 @@
 import type {
+  AccountTargets,
   AnalysisDevParams,
   AnalysisResponse,
   AlertZone,
@@ -16,16 +17,22 @@ import type {
   HealthResponse,
   NormalizedOrderIntent,
   OrderSubmissionResponse,
+  PaperAccount,
+  PaperPerformance,
+  PaperTrade,
   ScanJobLog,
   ScanStartResponse,
   IntegrationsStatusResponse,
   KillswitchResponse,
+  ManualOverride,
   SignalHistoryResponse,
+  SymbolParamsResponse,
   Setup,
   ScanSettings,
   ScanSettingsHistoryRow,
   SetupSummary,
   UniverseRankingStatus,
+  UniverseSettings,
   UniverseStats,
 } from "@/lib/types";
 import { DEFAULT_ANALYSIS_DEV_PARAMS } from "@/lib/types";
@@ -238,6 +245,25 @@ export const api = {
     postJson<{ status: string }>("/api/scanner/rank-universe", {}),
   getUniverseRankingStatus: () =>
     request<UniverseRankingStatus>("/api/scanner/ranking-status"),
+  getUniverses: () =>
+    request<UniverseSettings[]>("/api/universes"),
+  updateUniverse: (
+    universe_name: string,
+    settings: Partial<UniverseSettings>,
+  ) =>
+    request<{ status: string }>(
+      `/api/universes/${encodeURIComponent(universe_name)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(settings),
+        headers: { "Content-Type": "application/json" },
+      },
+    ),
+  rankUniverseSpecific: (universe_name: string) =>
+    request<{ status: string }>(
+      `/api/scanner/rank-universe/${encodeURIComponent(universe_name)}`,
+      { method: "POST" },
+    ),
   getCandles: async (symbol: string, timeframe: string) => {
     const path = `/api/candles/${encodeURIComponent(symbol)}?timeframe=${encodeURIComponent(timeframe)}`;
     const maxAttempts = 3;
@@ -281,6 +307,13 @@ export const api = {
     request<AnalysisResponse>(
       `/api/analysis/${encodeURIComponent(symbol)}?${buildAnalysisQueryString(timeframe, params)}`,
     ),
+  getSymbolParams: (symbol: string) =>
+    request<SymbolParamsResponse>(`/api/symbol-params/${encodeURIComponent(symbol)}`),
+  saveSymbolParams: (symbol: string, params: Partial<AnalysisDevParams>) =>
+    request<SymbolParamsResponse>(`/api/symbol-params/${encodeURIComponent(symbol)}`, {
+      method: "POST",
+      body: JSON.stringify(params),
+    }),
   getSignalHistory: (symbol: string, timeframe?: string, limit = 50) =>
     request<SignalHistoryResponse>(
       `/api/analysis/${encodeURIComponent(symbol)}/signals?limit=${encodeURIComponent(String(limit))}${
@@ -298,6 +331,35 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getOverrides: () => request<AlertZone[]>("/api/overrides"),
+  getManualStructureOverrides: (symbol: string) =>
+    request<ManualOverride[]>(
+      `/api/manual-structure-overrides/${encodeURIComponent(symbol)}`,
+    ),
+  setManualStructureOverride: (
+    symbol: string,
+    payload: Pick<ManualOverride, "override_type"> &
+      Partial<
+        Omit<ManualOverride, "id" | "symbol" | "override_type" | "is_active" | "created_at" | "updated_at" | "reset_at">
+      >,
+  ) =>
+    request<{ status: string; override: ManualOverride }>(
+      `/api/manual-structure-overrides/${encodeURIComponent(symbol)}`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+        headers: { "Content-Type": "application/json" },
+      },
+    ),
+  resetManualStructureOverride: (symbol: string, override_type: string) =>
+    request<{ status: string; symbol: string; override_type: string; rows_deactivated: number }>(
+      `/api/manual-structure-overrides/${encodeURIComponent(symbol)}/${encodeURIComponent(override_type)}`,
+      { method: "DELETE" },
+    ),
+  resetAllManualStructureOverrides: (symbol: string) =>
+    request<{ status: string; symbol: string; rows_deactivated: number }>(
+      `/api/manual-structure-overrides/${encodeURIComponent(symbol)}`,
+      { method: "DELETE" },
+    ),
   toggleKillswitch: () =>
     request<KillswitchResponse>("/api/system/killswitch", {
       method: "POST",
@@ -326,5 +388,65 @@ export const api = {
   getFundamentalNews: (symbol: string) =>
     request<FundamentalNewsResponse>(
       `/api/fundamentals/news/${encodeURIComponent(symbol)}`,
+    ),
+  getSetupStateHistory: (symbol: string, limit = 20) =>
+    request<import("@/lib/types").MarketStateHistoryItem[]>(
+      `/api/setups/${encodeURIComponent(symbol)}/state-history?limit=${limit}`,
+    ),
+  getPaperAccounts: () => request<PaperAccount[]>("/api/execution/paper/accounts"),
+  getPaperTrades: (params?: {
+    account_id?: number;
+    symbol?: string;
+    status?: string;
+    limit?: number;
+  }) => {
+    const qs = params
+      ? "?" +
+        new URLSearchParams(
+          Object.fromEntries(
+            Object.entries(params)
+              .filter(([, v]) => v !== undefined)
+              .map(([k, v]) => [k, String(v)]),
+          ),
+        ).toString()
+      : "";
+    return request<PaperTrade[]>(`/api/execution/paper/trades${qs}`);
+  },
+  getPaperPerformance: (account_id?: number, universe?: string) => {
+    const params = new URLSearchParams();
+    if (account_id !== undefined) params.set("account_id", String(account_id));
+    if (universe) params.set("universe", universe);
+    const qs = params.toString();
+    return request<PaperPerformance>(
+      `/api/execution/paper/performance${qs ? "?" + qs : ""}`,
+    );
+  },
+  closePaperTrade: (trade_id: number) =>
+    request<{ status: string; pnl_usd: number; trade_id?: number; close_price?: number }>(
+      `/api/execution/paper/trades/${trade_id}/close`,
+      { method: "POST" },
+    ),
+  runPaperEngine: () =>
+    request<{ monitor: object; new_trades_opened: number }>("/api/execution/paper/engine/run", {
+      method: "POST",
+    }),
+  updatePaperAccountSettings: (account_id: number, settings: Partial<PaperAccount>) =>
+    request<{ status: string }>(`/api/execution/paper/accounts/${account_id}/settings`, {
+      method: "PATCH",
+      body: JSON.stringify(settings),
+      headers: { "Content-Type": "application/json" },
+    }),
+  getAccountTargets: (account_id: number) =>
+    request<AccountTargets>(
+      `/api/execution/paper/accounts/${account_id}/targets`,
+    ),
+  updateAccountTargets: (account_id: number, targets: AccountTargets) =>
+    request<{ status: string; targets: AccountTargets }>(
+      `/api/execution/paper/accounts/${account_id}/targets`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(targets),
+        headers: { "Content-Type": "application/json" },
+      },
     ),
 };

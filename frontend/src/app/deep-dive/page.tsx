@@ -90,7 +90,8 @@ function DeepDiveContent() {
     refetchInterval: 30_000,
   });
 
-  const structuralState: StructuralState | undefined = analysisQuery.data?.structural_state;
+  const structuralState: StructuralState | undefined =
+    (analysisQuery.data?.structural_state as unknown as StructuralState | null | undefined) ?? undefined;
   const zones = useMemo(() => buildZones(structuralState), [structuralState]);
   const depth = Number(analysisQuery.data?.max_depth_reached ?? structuralState?.max_depth_reached ?? 1);
   const completedSteps = Math.max(0, Math.min(5, structuralState?.levels?.length ?? 0));

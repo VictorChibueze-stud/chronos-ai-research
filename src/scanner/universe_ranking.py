@@ -6,6 +6,7 @@ import logging
 import math
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,7 +19,8 @@ from src.adapters.deriv_data import fetch_deriv_ohlc_sync, get_active_deriv_symb
 from src.adapters.yfinance_data import fetch_yfinance_ohlc_sync, is_yfinance_symbol
 from src.core.filter_defaults import SCAN_AND_ANALYSIS_FILTER_DEFAULTS
 from src.core.trend_id import identify_trend
-from src.db.models import MonitoredSetup, UniverseScore
+from src.api.routers.setups import _infer_universe
+from src.db.models import GlobalStructureCache, MonitoredSetup, UniverseScore
 from src.db.session import SessionLocal
 from src.scanner.analysis_job_state import get_analysis_job_flags
 from src.scanner.job_log import write_job_log
@@ -30,6 +32,8 @@ from src.scanner.market_scanner import (
 )
 
 logger = logging.getLogger(__name__)
+
+from sqlalchemy import text
 
 _SYMBOLS_CFG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "symbols.yaml"
 _TF_WINDOWS_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "timeframe_windows.yaml"
@@ -46,6 +50,19 @@ _ranking_status: dict[str, Any] = {
 }
 
 _ranking_lock = threading.Lock()
+
+_CATEGORY_MIN_SLOT_KEYS = (
+    "forex", "commodity", "indices", "synthetic", "crypto", "equities",
+)
+
+
+def _filter_universe_symbols(
+    symbols: list[str],
+    universe: str,
+) -> list[str]:
+    """Filter symbol list to only those belonging to the given universe."""
+    return [s for s in symbols if _infer_universe(s) == universe]
+_SYNTHETIC_PREFIXES = ("R_", "1HZ", "BOOM", "CRASH", "JD", "OTC_", "STEP", "WLD")
 
 
 def _load_lookback_days(interval: str) -> float:
@@ -141,6 +158,66 @@ def _serialize_legs(legs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _prune_non_top_setups(
+    db,
+    keep_symbols: set[str],
+    universe_name: str | None = None,
+) -> None:
+    if not keep_symbols:
+        return
+
+    rows = list(
+        db.execute(
+            text(
+                """
+                SELECT ms.id, ms.symbol, ms.universe,
+                       CASE
+                           WHEN EXISTS (
+                               SELECT 1
+                               FROM alert_zones az
+                               WHERE az.setup_id = ms.id
+                                 AND az.is_manual_override IS TRUE
+                                 AND az.is_active IS TRUE
+                           )
+                           THEN 1
+                           ELSE 0
+                       END AS is_protected
+                FROM monitored_setups ms
+                """
+            )
+        ).mappings().all()
+    )
+
+    to_delete_ids: list[int] = []
+    for r in rows:
+        if bool(r["is_protected"]):
+            continue
+        sym_u = str(r["symbol"]).upper()
+        if sym_u in keep_symbols:
+            continue
+        if universe_name is not None:
+            ucol = r.get("universe")
+            if (ucol or _infer_universe(sym_u)) != universe_name:
+                continue
+        to_delete_ids.append(int(r["id"]))
+    if not to_delete_ids:
+        return
+
+    deleted = (
+        db.query(MonitoredSetup)
+        .filter(MonitoredSetup.id.in_(to_delete_ids))
+        .all()
+    )
+    for setup in deleted:
+        logger.info(
+            "Ranking prune: removing stale setup %s (score=%.1f)",
+            setup.symbol,
+            setup.trend_score,
+        )
+        db.delete(setup)
+    db.commit()
+
+
 def compute_ranking_metrics(result: dict[str, Any]) -> tuple[float, float, float, float, float, float]:
     """Impulse ratios, components, base_score, total_score (before min-legs zeroing)."""
     legs = [l for l in (result.get("legs") or []) if l.get("confirmed") is True]
@@ -148,7 +225,7 @@ def compute_ranking_metrics(result: dict[str, Any]) -> tuple[float, float, float
     retracements = [l for l in legs if l.get("type") == "retracement" and l.get("end_price") is not None]
 
     confirmed_count = len(legs)
-    if confirmed_count < 3:
+    if confirmed_count < 2:
         return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
     impulse_price = sum(
@@ -190,23 +267,112 @@ def compute_ranking_metrics(result: dict[str, Any]) -> tuple[float, float, float
     return impulse_price_ratio, impulse_velocity_ratio, price_component, velocity_component, base_score, total_score
 
 
+def _promotion_category(symbol: str) -> str:
+    sym = symbol.upper()
+    if sym.endswith("USDT") or sym.endswith("BTC"):
+        return "crypto"
+    from src.adapters.yfinance_data import YFINANCE_SECTOR_MAP
+    if sym in YFINANCE_SECTOR_MAP:
+        return "equities"
+    if sym in set(DERIV_FOREX_SYMBOLS) or sym.startswith("FRX"):
+        return "forex"
+    if is_yfinance_symbol(sym) or sym in {"SPX500", "NAS100", "DAX40", "FTSE100", "NKY225", "GER40", "UK100", "JP225"}:
+        return "indices"
+    if sym in set(DERIV_COMMODITY_SYMBOLS):
+        return "commodity"
+    if sym in set(DERIV_INDICES_SYMBOLS):
+        return "indices"
+    if any(sym.startswith(prefix) for prefix in _SYNTHETIC_PREFIXES):
+        return "synthetic"
+    return "other"
+
+
+def _select_top_with_category_mins(
+    sorted_rows: list[dict[str, Any]],
+    capacity: int,
+    mins: dict[str, int],
+) -> list[dict[str, Any]]:
+    if len(sorted_rows) <= capacity:
+        return list(sorted_rows)
+
+    selected = list(sorted_rows[:capacity])
+    selected_symbols = {str(r["symbol"]).upper() for r in selected}
+
+    def _counts(rows: list[dict[str, Any]]) -> Counter[str]:
+        return Counter(_promotion_category(str(r["symbol"])) for r in rows)
+
+    counts = _counts(selected)
+    max_swaps = max(capacity * 10, 100)
+
+    for _ in range(max_swaps):
+        deficit_category: str | None = None
+        for ckey in _CATEGORY_MIN_SLOT_KEYS:
+            need = int(mins.get(ckey, 0))
+            if need > 0 and counts.get(ckey, 0) < need:
+                deficit_category = ckey
+                break
+        if deficit_category is None:
+            break
+
+        outsider: dict[str, Any] | None = None
+        for row in sorted_rows:
+            sym = str(row["symbol"]).upper()
+            if sym in selected_symbols:
+                continue
+            if _promotion_category(sym) == deficit_category:
+                outsider = row
+                break
+        if outsider is None:
+            logger.warning(
+                "Promotion mins: unable to satisfy %r minimum; no outsider available",
+                deficit_category,
+            )
+            break
+
+        insider_index: int | None = None
+        for i in range(len(selected) - 1, -1, -1):
+            cat = _promotion_category(str(selected[i]["symbol"]))
+            if counts.get(cat, 0) > int(mins.get(cat, 0)):
+                insider_index = i
+                break
+        if insider_index is None:
+            logger.warning(
+                "Promotion mins: unable to satisfy %r minimum; no swappable insider",
+                deficit_category,
+            )
+            break
+
+        removed = selected[insider_index]
+        selected[insider_index] = outsider
+        selected_symbols.remove(str(removed["symbol"]).upper())
+        selected_symbols.add(str(outsider["symbol"]).upper())
+        counts = _counts(selected)
+
+    selected.sort(key=lambda r: (-float(r["total_score"]), str(r["symbol"])))
+    return selected
+
+
 def _choose_basis_and_result(
     res_w: dict[str, Any],
     res_d: dict[str, Any],
+    candles_w: list[Any],
+    candles_d: list[Any],
 ) -> tuple[str, dict[str, Any], bool]:
-    """Pick timeframe_basis and trend result; force_score_zero if neither has >=2 confirmed legs."""
+    """Pick timeframe_basis and trend result from only 1w/1d; weekly wins ties unless weekly has no candles."""
+    if not candles_w and candles_d:
+        return "1d", res_d, False
+    if not candles_w and not candles_d:
+        return "1d", res_d, True
+
     cw = _confirmed_leg_count(res_w.get("legs") or [])
     cd = _confirmed_leg_count(res_d.get("legs") or [])
 
-    if cw >= 2 and cd >= 2:
-        if cd > cw:
-            return "1d", res_d, False
-        return "1w", res_w, False
-    if cw >= 2:
-        return "1w", res_w, False
-    if cd >= 2:
+    if cd > cw:
         return "1d", res_d, False
-    return "1d", res_d, True
+    # Tie or weekly stronger -> weekly (weekly zero-candle case is handled above).
+    if candles_w:
+        return "1w", res_w, False
+    return "1d", res_d, False
 
 
 def _score_one_symbol(symbol: str, active_deriv: frozenset[str]) -> dict[str, Any]:
@@ -218,13 +384,13 @@ def _score_one_symbol(symbol: str, active_deriv: frozenset[str]) -> dict[str, An
         candles_d = _fetch_htf_candles(symbol, "1d", active_set)
         res_d = identify_trend(candles_d or [], **SCAN_AND_ANALYSIS_FILTER_DEFAULTS)
 
-        basis_tf, result, force_zero = _choose_basis_and_result(res_w, res_d)
+        basis_tf, result, force_zero = _choose_basis_and_result(res_w, res_d, candles_w, candles_d)
         legs = result.get("legs") or []
         confirmed_n = _confirmed_leg_count(legs)
 
         ipr, ivr, _pc, _vc, _bs, total = compute_ranking_metrics(result)
         retr_bonus = 15.0 if result.get("current_phase") == "retracement" else 0.0
-        if force_zero or confirmed_n < 3:
+        if force_zero or confirmed_n < 2:
             total = 0.0
 
         duration = time.perf_counter() - t0
@@ -272,16 +438,164 @@ def get_ranking_status() -> dict[str, Any]:
     return out
 
 
-def trigger_ranking_async() -> dict[str, Any]:
+def trigger_ranking_async(
+    force: bool = False,
+    universe: str | None = None,
+) -> dict[str, Any]:
     with _ranking_lock:
         if _ranking_status.get("in_progress"):
             return {"started": False, "reason": "already_running"}
         _ranking_status["last_error"] = None
         _ranking_status["in_progress"] = True
 
-    thread = threading.Thread(target=run_universe_ranking, daemon=True)
+    thread = threading.Thread(
+        target=run_universe_ranking,
+        kwargs={"force": force, "universe": universe},
+        daemon=True,
+    )
     thread.start()
     return {"started": True}
+
+
+def _run_full_analysis_chain(
+    symbols: list[str],
+    depth: str = "full_chain",
+    force: bool = False,
+    max_workers: int = 10,
+) -> None:
+    """
+    Run the full analysis chain for given symbols in order:
+    1. Fetch all timeframes
+    2. Global structure
+    3. Prime impulse (if depth >= global_and_prime)
+    4. Walker (if depth >= global_prime_walker)
+    5. Candidate impulse (if depth == full_chain)
+    6. Market state
+    """
+    from src.db.session import SessionLocal
+    from src.cache.candle_store import refresh_candles
+    from src.scanner.global_structure import (
+        compute_global_structure_for_symbol,
+        compute_prime_impulse_structure,
+        compute_walker_for_symbol,
+        compute_candidate_impulse_for_symbol,
+        compute_and_write_market_state,
+    )
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from datetime import datetime, timezone, timedelta
+
+    ALL_TIMEFRAMES = ["5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo"]
+    DEPTH_ORDER = [
+        "global_only",
+        "global_and_prime",
+        "global_prime_walker",
+        "full_chain",
+    ]
+
+    def depth_gte(d: str, threshold: str) -> bool:
+        try:
+            return DEPTH_ORDER.index(d) >= DEPTH_ORDER.index(threshold)
+        except ValueError:
+            return False
+
+    def _run(fn, symbol):
+        db = SessionLocal()
+        try:
+            fn(symbol, db)
+        except Exception as e:
+            logger.warning("%s failed for %s: %s", fn.__name__, symbol, e)
+        finally:
+            db.close()
+
+    def _fetch_tfs(symbol):
+        db = SessionLocal()
+        try:
+            for tf in ALL_TIMEFRAMES:
+                try:
+                    refresh_candles(symbol, tf, db)
+                except Exception as e:
+                    logger.warning("Candle fetch %s %s: %s", symbol, tf, e)
+        finally:
+            db.close()
+
+    logger.info(
+        "Analysis chain: %d symbols depth=%s force=%s",
+        len(symbols), depth, force,
+    )
+
+    # Step 1 — candles
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(_fetch_tfs, sym): sym for sym in symbols}
+        for fut in as_completed(futs):
+            try:
+                fut.result()
+            except Exception as e:
+                logger.warning("Candle error %s: %s", futs[fut], e)
+
+    # Step 2 — global structure
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {
+            ex.submit(_run, compute_global_structure_for_symbol, sym): sym
+            for sym in symbols
+        }
+        for fut in as_completed(futs):
+            try:
+                fut.result()
+            except Exception as e:
+                logger.warning("Global structure error %s: %s", futs[fut], e)
+
+    # Step 3 — prime impulse
+    if depth_gte(depth, "global_and_prime"):
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = {
+                ex.submit(_run, compute_prime_impulse_structure, sym): sym
+                for sym in symbols
+            }
+            for fut in as_completed(futs):
+                try:
+                    fut.result()
+                except Exception as e:
+                    logger.warning("Prime impulse error %s: %s", futs[fut], e)
+
+    # Step 4 — walker
+    if depth_gte(depth, "global_prime_walker"):
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = {
+                ex.submit(_run, compute_walker_for_symbol, sym): sym
+                for sym in symbols
+            }
+            for fut in as_completed(futs):
+                try:
+                    fut.result()
+                except Exception as e:
+                    logger.warning("Walker error %s: %s", futs[fut], e)
+
+    # Step 5 — candidate impulse
+    if depth_gte(depth, "full_chain"):
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = {
+                ex.submit(_run, compute_candidate_impulse_for_symbol, sym): sym
+                for sym in symbols
+            }
+            for fut in as_completed(futs):
+                try:
+                    fut.result()
+                except Exception as e:
+                    logger.warning("Candidate error %s: %s", futs[fut], e)
+
+    # Step 6 — market state
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {
+            ex.submit(_run, compute_and_write_market_state, sym): sym
+            for sym in symbols
+        }
+        for fut in as_completed(futs):
+            try:
+                fut.result()
+            except Exception as e:
+                logger.warning("Market state error %s: %s", futs[fut], e)
+
+    logger.info("Analysis chain complete: %d symbols", len(symbols))
 
 
 def _run_post_ranking_analysis(symbols: list[str]) -> None:
@@ -385,16 +699,51 @@ def _run_post_ranking_analysis(symbols: list[str]) -> None:
     logger.info("Post-ranking Step 4 complete: all %d symbols fully analysed", len(symbols))
 
 
-def run_universe_ranking() -> None:
+def _run_universe_structure_cache_prefill(symbols: list[str]) -> None:
+    from src.scanner.global_structure import compute_global_structure_for_symbol
+
+    def _compute_if_missing(sym: str) -> None:
+        db = SessionLocal()
+        try:
+            existing = (
+                db.query(GlobalStructureCache)
+                .filter(GlobalStructureCache.symbol == sym)
+                .first()
+            )
+            if existing is not None:
+                return
+            compute_global_structure_for_symbol(sym, db)
+            logger.info("Universe structure cache: %s computed", sym)
+        except Exception as exc:
+            logger.warning("Universe structure cache failed for %s: %s", sym, exc)
+        finally:
+            db.close()
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(_compute_if_missing, sym) for sym in symbols]
+        for fut in as_completed(futures):
+            try:
+                fut.result()
+            except Exception:
+                # Worker-level errors are already logged in _compute_if_missing.
+                pass
+
+
+def run_universe_ranking(
+    force: bool = False,
+    universe: str | None = None,
+) -> None:
     from src.api.routers.setups import (
         MONITORED_CAPACITY,
         _evict_to_capacity,
         _get_effective_scan_settings,
+        _get_universe_capacity,
+        _get_universe_settings,
     )
 
     started_wall = datetime.now(timezone.utc)
     job_started = time.perf_counter()
-    universe: list[str] = []
+    universe_symbols: list[str] = []
     success_count = 0
     failure_count = 0
     results: list[dict[str, Any]] = []
@@ -423,14 +772,28 @@ def run_universe_ranking() -> None:
                 top_n = 350
             if top_n not in range(10, 1001):
                 top_n = 350
+            if universe is not None:
+                us_row_top = _get_universe_settings(universe, db_for_settings)
+                if us_row_top is not None:
+                    try:
+                        top_n = int(us_row_top.top_n)
+                    except (TypeError, ValueError):
+                        pass
+                    if top_n not in range(10, 10001):
+                        top_n = 350
         finally:
             db_for_settings.close()
 
-        universe = build_ranking_universe(top_n=top_n)
+        universe_symbols = build_ranking_universe(top_n=top_n)
         if "yfinance" in (ranking_settings.get("brokers") or []):
             from src.api.routers.setups import _yfinance_config_symbols
 
-            universe = sorted(set(universe) | set(_yfinance_config_symbols()))
+            universe_symbols = sorted(
+                set(universe_symbols) | set(_yfinance_config_symbols())
+            )
+
+        if universe is not None:
+            universe_symbols = _filter_universe_symbols(universe_symbols, universe)
 
         try:
             active_deriv = frozenset(get_active_deriv_symbols())
@@ -438,11 +801,14 @@ def run_universe_ranking() -> None:
             active_deriv = frozenset()
 
         with _ranking_lock:
-            _ranking_status["total_symbols"] = len(universe)
+            _ranking_status["total_symbols"] = len(universe_symbols)
 
         scored_batch_start = time.perf_counter()
         with ThreadPoolExecutor(max_workers=20) as executor:
-            future_map = {executor.submit(_score_one_symbol, sym, active_deriv): sym for sym in universe}
+            future_map = {
+                executor.submit(_score_one_symbol, sym, active_deriv): sym
+                for sym in universe_symbols
+            }
             done = 0
             for fut in as_completed(future_map):
                 sym = future_map[fut]
@@ -478,7 +844,7 @@ def run_universe_ranking() -> None:
                     if done % 10 == 0 and done > 0:
                         elapsed = time.perf_counter() - scored_batch_start
                         rate = done / elapsed
-                        remaining = len(universe) - done
+                        remaining = len(universe_symbols) - done
                         _ranking_status["estimated_seconds_remaining"] = (
                             int(remaining / rate) if rate > 0 else None
                         )
@@ -523,7 +889,57 @@ def run_universe_ranking() -> None:
                     u.universe_rank = rank_map.get(row["symbol"])
             db.commit()
 
-            top50 = sorted_rows[:50]
+            mins_raw = ranking_settings.get("category_min_slots") or {}
+            mins = {
+                key: max(0, int(mins_raw.get(key, 0)))
+                for key in _CATEGORY_MIN_SLOT_KEYS
+            }
+            if universe is not None:
+                us_row = _get_universe_settings(universe, db)
+                if us_row is not None and us_row.category_min_slots_json:
+                    for key in _CATEGORY_MIN_SLOT_KEYS:
+                        try:
+                            v = (us_row.category_min_slots_json or {}).get(key)
+                            if v is not None:
+                                mins[key] = max(0, int(v))
+                        except (TypeError, ValueError):
+                            pass
+            if universe is not None:
+                db_cap = SessionLocal()
+                try:
+                    capacity = _get_universe_capacity(universe, db_cap)
+                finally:
+                    db_cap.close()
+            else:
+                capacity = MONITORED_CAPACITY
+            top50 = _select_top_with_category_mins(
+                sorted_rows,
+                capacity=capacity,
+                mins=mins,
+            )
+            promoted_symbols = {r["symbol"] for r in top50}
+            non_promoted_symbols = [
+                r["symbol"] for r in sorted_rows if r["symbol"] not in promoted_symbols
+            ]
+            if universe is not None:
+                us_d = _get_universe_settings(universe, db)
+                non_top50_depth = (
+                    (us_d.non_top_n_depth if us_d is not None else None)
+                    or ranking_settings.get(
+                        "non_top50_analysis_depth", "global_and_prime"
+                    )
+                )
+            else:
+                non_top50_depth = ranking_settings.get(
+                    "non_top50_analysis_depth", "global_and_prime"
+                )
+            if non_top50_depth != "none" and non_promoted_symbols:
+                threading.Thread(
+                    target=_run_full_analysis_chain,
+                    args=(non_promoted_symbols,),
+                    kwargs={"depth": non_top50_depth, "force": force},
+                    daemon=True,
+                ).start()
             for r in top50:
                 sym = r["symbol"]
                 tf = r["timeframe_basis"]
@@ -543,10 +959,14 @@ def run_universe_ranking() -> None:
                     .order_by(MonitoredSetup.trend_score.desc(), MonitoredSetup.id.asc())
                     .first()
                 )
+                univ_val = (
+                    universe if universe is not None else _infer_universe(sym)
+                )
                 if existing_ms is None:
                     db.add(
                         MonitoredSetup(
                             symbol=sym,
+                            universe=univ_val,
                             htf_timeframe=tf,
                             htf_trend_direction=trend,
                             current_phase=phase_val,
@@ -560,6 +980,7 @@ def run_universe_ranking() -> None:
                         )
                     )
                 else:
+                    existing_ms.universe = univ_val
                     existing_ms.htf_timeframe = tf
                     existing_ms.htf_trend_direction = trend
                     existing_ms.trend_score = score
@@ -573,9 +994,18 @@ def run_universe_ranking() -> None:
                 db.commit()
 
             scan_settings = _get_effective_scan_settings(db)
-            _evict_to_capacity(db, capacity=MONITORED_CAPACITY, settings=scan_settings)
-
-            top_50_symbols = [r["symbol"] for r in sorted_rows[:50]]
+            top_50_symbols = [r["symbol"] for r in top50]
+            _prune_non_top_setups(
+                db,
+                keep_symbols=set(top_50_symbols),
+                universe_name=universe,
+            )
+            _evict_to_capacity(
+                db,
+                capacity=capacity,
+                settings=scan_settings,
+                universe=universe,
+            )
 
             duration_sec = time.perf_counter() - job_started
             write_job_log(
@@ -584,15 +1014,16 @@ def run_universe_ranking() -> None:
                 started_at=started_wall,
                 completed_at=datetime.now(timezone.utc),
                 duration_seconds=duration_sec,
-                total_symbols=len(universe),
+                total_symbols=len(universe_symbols),
                 success_count=success_count,
                 failure_count=failure_count,
                 status="completed",
                 error_message=None,
             )
             threading.Thread(
-                target=_run_post_ranking_analysis,
+                target=_run_full_analysis_chain,
                 args=(top_50_symbols,),
+                kwargs={"depth": "full_chain", "force": force},
                 daemon=True,
             ).start()
         finally:
@@ -616,7 +1047,7 @@ def run_universe_ranking() -> None:
                     started_at=started_wall,
                     completed_at=datetime.now(timezone.utc),
                     duration_seconds=duration_sec,
-                    total_symbols=len(universe) if universe else 0,
+                    total_symbols=len(universe_symbols) if universe_symbols else 0,
                     success_count=success_count,
                     failure_count=failure_count,
                     status="failed",

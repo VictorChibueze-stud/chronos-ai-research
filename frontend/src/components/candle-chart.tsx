@@ -20,12 +20,15 @@ import {
 import type {
   BosLevel,
   CandleBar,
+  CandidateMovePayload,
   CandidateMoveTealStructure,
   ChochLevel,
   ChochZone,
   StructureChochZone,
   TrendLeg,
+  PaperTradeLevels,
   TrendWindowStructure,
+  WalkerLevel,
 } from "@/lib/types";
 import {
   CHART_CHOCH_DEPTH1_BLUE,
@@ -34,8 +37,30 @@ import {
   STRUCTURE_CANDIDATE_MOVE,
 } from "@/lib/structure-colors";
 
+const CANDIDATE_IMPULSE_COLOR = "#00C853";
+const CANDIDATE_RETRACEMENT_COLOR = "#D50000";
+const WALKER_DEPTH_COLORS: Record<number, string> = {
+  1: "#2196F3",
+  2: "#4CAF50",
+  3: "#9C27B0",
+};
+const BOS_CLASS_COLORS: Record<string, string> = {
+  true: "#00C853",
+  false: "#D50000",
+  pending: "#9E9E9E",
+  broken: "#FFFFFF",
+};
+const WALKER_ZONE_ALPHA = 0.05;
+
 /** API may send Python `internal_structure.legs` until fully normalized. */
 type LegInput = TrendLeg & { internal_structure?: { legs?: TrendLeg[] } };
+type CandidatePrimeImpulseInput = {
+  start_timestamp?: string | null;
+  start_price?: number;
+  end_price?: number | null;
+  internal_structure?: { legs?: TrendLeg[] };
+  choch_zone?: StructureChochZone | null;
+};
 
 function internalLegsList(leg: LegInput): TrendLeg[] {
   const direct = leg.internal_legs;
@@ -69,12 +94,35 @@ interface CandleChartProps {
     trend: string;
   } | null;
   trendWindowStructure?: TrendWindowStructure | null;
-  showBOS?: boolean;
-  showCHoCH?: boolean;
-  showLines?: boolean;
+  showGlobalLegs?: boolean;
+  showGlobalBos?: boolean;
+  showGlobalChochZone?: boolean;
+  showGlobalIchochZone?: boolean;
+  showPrimeLegs?: boolean;
+  showPrimeIchochZone?: boolean;
+  showWalkerDepthRects?: boolean;
+  showWalkerBosLines?: boolean;
+  showCandidateLegs?: boolean;
+  showCandidateChochZone?: boolean;
+  showCandidateIchochZone?: boolean;
+  showCandidatePrimeLegs?: boolean;
+  showCandidatePrimeChoch?: boolean;
+  walkerLevels?: WalkerLevel[];
+  bosClassifications?: Record<string, string>;
+  primeImpulseStructure?: {
+    legs: TrendLeg[];
+    source_tf?: string;
+    choch_zone?: StructureChochZone | null;
+  } | null;
+  candidatePrimeImpulse?: CandidatePrimeImpulseInput | null;
+  candidatePrimeChochZone?: StructureChochZone | null;
+  /** Walker levels computed on the candidate prime retracement window. */
+  candidateWalker?: CandidateMovePayload["candidate_walker"];
   /** When false, only candles/volume render; structural overlays load after parent analysis is ready. */
   showAnalysisOverlays?: boolean;
   isSwitchingTimeframe?: boolean;
+  openPaperTrade?: PaperTradeLevels | null;
+  showPaperTradeOverlays?: boolean;
 }
 
 function candleTimeSeconds(c: CandleBar): UTCTimestamp | null {
@@ -134,11 +182,29 @@ export default function CandleChart({
   provisionalDeveloping = null,
   trendStartOverlay = null,
   trendWindowStructure = null,
-  showBOS = true,
-  showCHoCH = true,
-  showLines = true,
+  showGlobalLegs = true,
+  showGlobalBos = true,
+  showGlobalChochZone = true,
+  showGlobalIchochZone = true,
+  showPrimeLegs = true,
+  showPrimeIchochZone = true,
+  showWalkerDepthRects = true,
+  showWalkerBosLines = true,
+  showCandidateLegs = true,
+  showCandidateChochZone = true,
+  showCandidateIchochZone = true,
+  showCandidatePrimeLegs = true,
+  showCandidatePrimeChoch = true,
+  walkerLevels = [],
+  bosClassifications = {},
+  primeImpulseStructure = null,
+  candidatePrimeImpulse = null,
+  candidatePrimeChochZone = null,
+  candidateWalker = null,
   showAnalysisOverlays = true,
   isSwitchingTimeframe: _isSwitchingTimeframe = false,
+  openPaperTrade = null,
+  showPaperTradeOverlays = false,
 }: CandleChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -301,7 +367,22 @@ export default function CandleChart({
       return;
     }
 
-    if (showLines === false && showBOS === false && showCHoCH === false) {
+    const structureAllOff =
+      !showGlobalLegs &&
+      !showGlobalBos &&
+      !showGlobalChochZone &&
+      !showGlobalIchochZone &&
+      !showPrimeLegs &&
+      !showPrimeIchochZone &&
+      !showWalkerDepthRects &&
+      !showWalkerBosLines &&
+      !showCandidateLegs &&
+      !showCandidateChochZone &&
+      !showCandidateIchochZone &&
+      !showCandidatePrimeLegs &&
+      !showCandidatePrimeChoch;
+    const paperOverlayOn = Boolean(showPaperTradeOverlays && openPaperTrade);
+    if (structureAllOff && !paperOverlayOn) {
       return;
     }
 
@@ -322,7 +403,7 @@ export default function CandleChart({
     };
 
     // Layer 1 — outer leg diagonals (timestamps align to displayed candle slice, not full-series indices)
-    if (showLines !== false) {
+    if (showGlobalLegs !== false) {
       for (const leg of legs) {
         if (!leg.confirmed) {
           continue;
@@ -374,7 +455,7 @@ export default function CandleChart({
     // Layer 2 — internal structure (black dashed), last confirmed impulse only
     const lastImpulseForInternals =
       [...legs].filter((l) => l.confirmed && l.type === "impulse").pop() ?? null;
-    if (showLines !== false) {
+    if (showPrimeLegs !== false) {
       for (const leg of legs as LegInput[]) {
         if (!leg.confirmed || leg.type !== "impulse") {
           continue;
@@ -453,7 +534,7 @@ export default function CandleChart({
     }
 
     // Layer 3 — global BOS segments (impulse end → break bar or last bar)
-    if (showBOS !== false) {
+    if (showGlobalBos !== false) {
       for (const level of bosLevels) {
         const startIdx = findCandleIndexByTime(candles, level.start_timestamp);
         if (startIdx === -1) {
@@ -500,23 +581,24 @@ export default function CandleChart({
     }
 
     // Layer 3b — CHoCH rectangles from analysis (global amber, internal teal — fixed palette)
-    const analysisChochBands: Array<{ zone: StructureChochZone; baseColor: string; title: string }> = [];
-    if (globalChochZone) {
+    const analysisChochBands: Array<{ zone: StructureChochZone; baseColor: string; title: string; showProp: boolean }> = [];
+    if (showGlobalChochZone !== false && globalChochZone) {
       analysisChochBands.push({
         zone: globalChochZone,
         baseColor: CHART_GLOBAL_CHOCH_AMBER,
         title: "CHoCH",
+        showProp: true,
       });
     }
-    if (internalChochZone) {
+    if (showPrimeIchochZone !== false && internalChochZone) {
       analysisChochBands.push({
         zone: internalChochZone,
         baseColor: CHART_INTERNAL_CHOCH_TEAL,
         title: "iCHoCH",
+        showProp: true,
       });
     }
-    if (showCHoCH !== false) {
-      for (const { zone, baseColor, title } of analysisChochBands) {
+    for (const { zone, baseColor, title } of analysisChochBands) {
         const zStart = findCandleIndexByTime(candles, zone.start_timestamp);
         if (zStart === -1) {
           continue;
@@ -580,12 +662,64 @@ export default function CandleChart({
           });
         }
       }
-    }
 
     // Layer 3c — CHoCH candidate move (teal BOS + bands on slice from pivot)
-    if (candidateMoveTealStructure) {
+    if ((showCandidateLegs || showCandidateChochZone || showCandidateIchochZone || showCandidatePrimeLegs || showCandidatePrimeChoch) && candidateMoveTealStructure) {
+      const tealLegs = candidateMoveTealStructure.legs ?? [];
+      if (showCandidateLegs !== false) {
+        for (const leg of tealLegs) {
+          if (!leg.confirmed) {
+            continue;
+          }
+          const startIdx = findCandleIndexByTime(candles, leg.start_timestamp);
+          if (startIdx === -1) {
+            continue;
+          }
+          let endIdx = findCandleIndexByTime(candles, leg.end_timestamp);
+          if (endIdx === -1) {
+            endIdx = lastIdx;
+          }
+          endIdx = Math.min(Math.max(endIdx, startIdx), lastIdx);
+          const startT = timeAt(startIdx);
+          const endT = timeAt(endIdx);
+          if (startT === null || endT === null) {
+            continue;
+          }
+          const effectiveEndT = startT === endT
+            ? timeAt(Math.min(endIdx + 1, lastIdx))
+            : endT;
+          if (effectiveEndT === null) {
+            continue;
+          }
+
+          const isCandidateStyle = leg.render_style === "candidate";
+          const color = isCandidateStyle
+            ? leg.type === "impulse"
+              ? "#26A69A"
+              : "#EF5350"
+            : STRUCTURE_CANDIDATE_MOVE;
+
+          const tealLegSeries = chart.addSeries(LineSeries, {
+            color,
+            lineWidth: 2,
+            lineStyle: isCandidateStyle ? LineStyle.Dashed : LineStyle.Solid,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            crosshairMarkerVisible: false,
+          });
+          tealLegSeries.setData([
+            { time: startT, value: leg.start_price },
+            { time: effectiveEndT, value: leg.end_price ?? candles[endIdx]!.close },
+          ]);
+          cleanupItems.push(() => {
+            chart.removeSeries(tealLegSeries);
+          });
+        }
+      }
+
       const tealBos = candidateMoveTealStructure.bos_levels ?? [];
-      for (const level of tealBos) {
+      if (showCandidateChochZone !== false) {
+        for (const level of tealBos) {
         const startIdx = findCandleIndexByTime(candles, level.start_timestamp);
         if (startIdx === -1) {
           continue;
@@ -622,15 +756,16 @@ export default function CandleChart({
           chart.removeSeries(tealBosSeries);
         });
       }
+      }
+
       const tealChochBands: Array<{ zone: StructureChochZone; title: string }> = [];
-      if (candidateMoveTealStructure.internal_choch_zone) {
+      if (showCandidateIchochZone !== false && candidateMoveTealStructure.internal_choch_zone) {
         tealChochBands.push({
           zone: candidateMoveTealStructure.internal_choch_zone,
           title: "cand iCHoCH",
         });
       }
-      if (showCHoCH !== false) {
-        for (const { zone, title } of tealChochBands) {
+      for (const { zone, title } of tealChochBands) {
           const zStart = findCandleIndexByTime(candles, zone.start_timestamp);
           if (zStart === -1) {
             continue;
@@ -695,6 +830,107 @@ export default function CandleChart({
             });
           }
         }
+
+      // Candidate prime impulse internals (white dotted) and prime CHoCH zone.
+      if (candidatePrimeImpulse) {
+        const cPrimeInternalLegs = candidatePrimeImpulse.internal_structure?.legs ?? [];
+        if (showCandidatePrimeLegs !== false) {
+          for (const il of cPrimeInternalLegs) {
+          if (!il.confirmed) {
+            continue;
+          }
+          const startIdx = findCandleIndexByTime(candles, il.start_timestamp);
+          if (startIdx === -1) {
+            continue;
+          }
+          let endIdx = findCandleIndexByTime(candles, il.end_timestamp);
+          if (endIdx === -1) {
+            endIdx = lastIdx;
+          }
+          endIdx = Math.min(Math.max(endIdx, startIdx), lastIdx);
+          const startT = timeAt(startIdx);
+          const endT = timeAt(endIdx);
+          if (!startT || !endT || startT === endT) {
+            continue;
+          }
+          const cPrimeInternalSeries = chart.addSeries(LineSeries, {
+            color: "#FFFFFF",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            crosshairMarkerVisible: false,
+          });
+          cPrimeInternalSeries.setData([
+            { time: startT, value: il.start_price },
+            { time: endT, value: il.end_price ?? candles[endIdx]!.close },
+          ]);
+          cleanupItems.push(() => {
+            chart.removeSeries(cPrimeInternalSeries);
+          });
+        }
+        }
+
+        const cPrimeZone =
+          showCandidatePrimeChoch !== false
+            ? candidatePrimeChochZone ??
+              candidatePrimeImpulse.choch_zone ??
+              null
+            : null;
+        if (cPrimeZone) {
+          const zoneStartIdx = findCandleIndexByTime(
+            candles,
+            candidatePrimeImpulse.start_timestamp,
+          );
+          const zStart = zoneStartIdx !== -1 ? timeAt(zoneStartIdx) : timeAt(0);
+          const zEnd = timeAt(lastIdx);
+          const lower = Math.min(cPrimeZone.lower_boundary, cPrimeZone.upper_boundary);
+          const upper = Math.max(cPrimeZone.lower_boundary, cPrimeZone.upper_boundary);
+          if (zStart && zEnd && zStart !== zEnd && upper > lower) {
+            const zoneFill = hexWithAlphaByte("#FF9800", "1A");
+            const zoneLine = hexWithAlphaByte("#FF9800", "66");
+            const cPrimeBand = chart.addSeries(BaselineSeries, {
+              baseValue: { type: "price", price: lower },
+              topFillColor1: zoneFill,
+              topFillColor2: zoneFill,
+              bottomFillColor1: "#00000000",
+              bottomFillColor2: "#00000000",
+              topLineColor: "#00000000",
+              bottomLineColor: "#00000000",
+              lineWidth: 1,
+              lineVisible: false,
+              baseLineVisible: false,
+              lastValueVisible: false,
+              priceLineVisible: false,
+              crosshairMarkerVisible: false,
+              title: "",
+            });
+            cPrimeBand.setData([
+              { time: zStart, value: upper },
+              { time: zEnd, value: upper },
+            ]);
+            cleanupItems.push(() => {
+              chart.removeSeries(cPrimeBand);
+            });
+            for (const bPrice of [upper, lower]) {
+              const cPrimeBoundary = chart.addSeries(LineSeries, {
+                color: zoneLine,
+                lineWidth: 1,
+                lineStyle: LineStyle.Dashed,
+                lastValueVisible: false,
+                priceLineVisible: false,
+                crosshairMarkerVisible: false,
+              });
+              cPrimeBoundary.setData([
+                { time: zStart, value: bPrice },
+                { time: zEnd, value: bPrice },
+              ]);
+              cleanupItems.push(() => {
+                chart.removeSeries(cPrimeBoundary);
+              });
+            }
+          }
+        }
       }
     }
 
@@ -702,7 +938,7 @@ export default function CandleChart({
 
     // Layer 5 — CHoCH zone rectangles (BaselineSeries fills between base = lower and value = upper;
     // lightweight-charts v5 AreaSeries fills to pane bottom, so Baseline is used for the band.)
-    if (showCHoCH !== false && chochZones && chochZones.length > 0) {
+    if (showWalkerDepthRects !== false && chochZones && chochZones.length > 0) {
       for (const zone of chochZones) {
         if (Number(zone.depth) !== 1) {
           continue;
@@ -791,6 +1027,155 @@ export default function CandleChart({
       }
     }
 
+    // Layer 5b — Walker depth CHoCH zones (BaselineSeries, full chart width)
+    if (showWalkerDepthRects !== false && walkerLevels && walkerLevels.length > 0) {
+      for (const level of walkerLevels) {
+        const depth = level.depth ?? 1;
+        const color = WALKER_DEPTH_COLORS[depth] ?? "#607D8B";
+        const zone = level.choch_zone;
+        if (!zone) continue;
+
+        const lower = Math.min(zone.lower_boundary, zone.upper_boundary);
+        const upper = Math.max(zone.lower_boundary, zone.upper_boundary);
+        if (!(upper > lower)) continue;
+
+        const startT = timeAt(0);
+        const endT = timeAt(lastIdx);
+        if (!startT || !endT) continue;
+
+        const fillColor = hexWithAlphaByte(color, "0D");
+        const lineColor = hexWithAlphaByte(color, "55");
+
+        const bandSeries = chart.addSeries(BaselineSeries, {
+          baseValue: { type: "price", price: lower },
+          topFillColor1: fillColor,
+          topFillColor2: fillColor,
+          bottomFillColor1: "#00000000",
+          bottomFillColor2: "#00000000",
+          topLineColor: "#00000000",
+          bottomLineColor: "#00000000",
+          lineWidth: 1,
+          lineVisible: false,
+          baseLineVisible: false,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+          title: "",
+        });
+        bandSeries.setData([
+          { time: startT, value: upper },
+          { time: endT, value: upper },
+        ]);
+        cleanupItems.push(() => chart.removeSeries(bandSeries));
+
+        for (const bPrice of [upper, lower]) {
+          const bLine = chart.addSeries(LineSeries, {
+            color: lineColor,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            crosshairMarkerVisible: false,
+          });
+          bLine.setData([
+            { time: startT, value: bPrice },
+            { time: endT, value: bPrice },
+          ]);
+          cleanupItems.push(() => chart.removeSeries(bLine));
+        }
+      }
+    }
+
+    // Layer 5c — BOS classification dotted lines
+    if (showWalkerBosLines !== false && walkerLevels && bosClassifications) {
+      for (const level of walkerLevels) {
+        const depth = level.depth ?? 1;
+        const key = `depth_${depth}`;
+        const classification = bosClassifications[key] ?? "broken";
+        const color = BOS_CLASS_COLORS[classification] ?? "#FFFFFF";
+        const structLvl = level.structural_level;
+        if (!structLvl?.price) continue;
+
+        const bosStartIdx = Math.floor(candles.length * 0.3);
+        const startT = timeAt(bosStartIdx);
+        const endT = timeAt(lastIdx);
+        if (!startT || !endT || startT === endT) continue;
+
+        const bosSeries = chart.addSeries(LineSeries, {
+          color,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        bosSeries.setData([
+          { time: startT, value: structLvl.price },
+          { time: endT, value: structLvl.price },
+        ]);
+        cleanupItems.push(() => chart.removeSeries(bosSeries));
+      }
+    }
+
+    // Layer 5d — Candidate walker depth CHoCH zones (BaselineSeries, full chart width)
+    if (showWalkerDepthRects !== false && candidateWalker?.levels && candidateWalker.levels.length > 0) {
+      for (const level of candidateWalker.levels) {
+        const depth = level.depth ?? 1;
+        const color = WALKER_DEPTH_COLORS[depth] ?? "#607D8B";
+        const zone = level.choch_zone;
+        if (!zone) continue;
+
+        const lower = Math.min(zone.lower_boundary, zone.upper_boundary);
+        const upper = Math.max(zone.lower_boundary, zone.upper_boundary);
+        if (!(upper > lower)) continue;
+
+        const startT = timeAt(0);
+        const endT = timeAt(lastIdx);
+        if (!startT || !endT) continue;
+
+        const fillColor = hexWithAlphaByte(color, "09");
+        const lineColor = hexWithAlphaByte(color, "44");
+
+        const bandSeries = chart.addSeries(BaselineSeries, {
+          baseValue: { type: "price", price: lower },
+          topFillColor1: fillColor,
+          topFillColor2: fillColor,
+          bottomFillColor1: "#00000000",
+          bottomFillColor2: "#00000000",
+          topLineColor: "#00000000",
+          bottomLineColor: "#00000000",
+          lineWidth: 1,
+          lineVisible: false,
+          baseLineVisible: false,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+          title: "",
+        });
+        bandSeries.setData([
+          { time: startT, value: upper },
+          { time: endT, value: upper },
+        ]);
+        cleanupItems.push(() => chart.removeSeries(bandSeries));
+
+        for (const bPrice of [upper, lower]) {
+          const bLine = chart.addSeries(LineSeries, {
+            color: lineColor,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            crosshairMarkerVisible: false,
+          });
+          bLine.setData([
+            { time: startT, value: bPrice },
+            { time: endT, value: bPrice },
+          ]);
+          cleanupItems.push(() => chart.removeSeries(bLine));
+        }
+      }
+    }
+
     // Layer 6 — Trend start overlay (standalone test visualization)
     if (trendStartOverlay) {
       const startIdx = findCandleIndexByTime(candles, trendStartOverlay.start_timestamp);
@@ -824,7 +1209,7 @@ export default function CandleChart({
         [...wLegs].filter((l) => l.confirmed && l.type === "impulse").pop() ?? null;
 
       // 7a — Red/green leg diagonal lines (colors follow parent `trend`, not window-local trend)
-      if (showLines !== false) {
+      if (showGlobalLegs !== false) {
         for (const leg of wLegs) {
           if (!leg.confirmed) continue;
           const startIdx = findCandleIndexByTime(candles, leg.start_timestamp);
@@ -885,7 +1270,7 @@ export default function CandleChart({
       }
 
       // 7d — BOS levels
-      if (showBOS !== false) {
+      if (showGlobalBos !== false) {
         for (const bos of trendWindowStructure.bos_levels ?? []) {
           const bStart = findCandleIndexByTime(candles, bos.start_timestamp);
           if (bStart === -1) continue;
@@ -921,6 +1306,69 @@ export default function CandleChart({
       }
     }
 
+    if (paperOverlayOn && openPaperTrade) {
+      const t0 = timeAt(0);
+      const t1Raw = timeAt(lastIdx);
+      if (t0 && t1Raw) {
+        const t1 = t0 === t1Raw ? (((t0 as number) + 1) as UTCTimestamp) : t1Raw;
+        const entry = openPaperTrade.entry_price;
+        const stop = openPaperTrade.stop_price;
+        const tp = openPaperTrade.take_profit_price;
+        const fmt = (p: number) => {
+          if (Math.abs(p) >= 1000) return p.toFixed(2);
+          if (Math.abs(p) >= 10) return p.toFixed(4);
+          return p.toFixed(5);
+        };
+        if (tp != null && Number.isFinite(tp)) {
+          const lower = Math.min(stop, tp);
+          const upper = Math.max(stop, tp);
+          if (upper > lower) {
+            const zoneBand = chart.addSeries(BaselineSeries, {
+              baseValue: { type: "price", price: lower },
+              topFillColor1: "rgba(123,97,255,0.05)",
+              topFillColor2: "rgba(123,97,255,0.05)",
+              bottomFillColor1: "#00000000",
+              bottomFillColor2: "#00000000",
+              topLineColor: "#00000000",
+              bottomLineColor: "#00000000",
+              lineWidth: 1,
+              lineVisible: false,
+              baseLineVisible: false,
+              lastValueVisible: false,
+              priceLineVisible: false,
+              crosshairMarkerVisible: false,
+            });
+            zoneBand.setData([
+              { time: t0, value: upper },
+              { time: t1, value: upper },
+            ]);
+            cleanupItems.push(() => chart.removeSeries(zoneBand));
+          }
+        }
+        const addPaperHLine = (price: number, color: string, title: string) => {
+          const s = chart.addSeries(LineSeries, {
+            color,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            lastValueVisible: true,
+            priceLineVisible: true,
+            crosshairMarkerVisible: false,
+            title,
+          });
+          s.setData([
+            { time: t0, value: price },
+            { time: t1, value: price },
+          ]);
+          cleanupItems.push(() => chart.removeSeries(s));
+        };
+        addPaperHLine(entry, "#7B61FF", `ENTRY ${fmt(entry)}`);
+        addPaperHLine(stop, "#FF1744", `STOP ${fmt(stop)}`);
+        if (tp != null && Number.isFinite(tp)) {
+          addPaperHLine(tp, "#00C853", `TP ${fmt(tp)}`);
+        }
+      }
+    }
+
     overlayCleanupRef.current = cleanupItems;
 
     return () => {
@@ -939,10 +1387,27 @@ export default function CandleChart({
     provisionalDeveloping,
     trendStartOverlay,
     trendWindowStructure,
-    showBOS,
-    showCHoCH,
-    showLines,
+    walkerLevels,
+    bosClassifications,
+    showGlobalLegs,
+    showGlobalBos,
+    showGlobalChochZone,
+    showGlobalIchochZone,
+    showPrimeLegs,
+    showPrimeIchochZone,
+    showWalkerDepthRects,
+    showWalkerBosLines,
+    showCandidateLegs,
+    showCandidateChochZone,
+    showCandidateIchochZone,
+    showCandidatePrimeLegs,
+    showCandidatePrimeChoch,
+    candidatePrimeImpulse,
+    candidatePrimeChochZone,
+    candidateWalker,
     showAnalysisOverlays,
+    openPaperTrade,
+    showPaperTradeOverlays,
   ]);
 
   return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;

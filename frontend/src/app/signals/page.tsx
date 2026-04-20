@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
 
 import { QueryProvider } from "@/components/query-provider";
+import { MarketStateBadge, MarketStateDrawer } from "@/components/market-state-badge";
 import { LiveStatusMeta, LiveStatusRow } from "@/components/ui/live-status";
 import { Tooltip } from "@/components/ui/tooltip";
 import { formatLocaleInt, formatScore } from "@/lib/format-display";
@@ -25,6 +26,7 @@ import type { Setup } from "@/lib/types";
 
 type SignalRow = Setup & {
   asset_bucket: ReturnType<typeof normalizeAssetClassForFilter>;
+  market_state?: string | null;
   trend: Setup["trend"];
   timeframe: string;
   waiting_for_display: string;
@@ -73,7 +75,35 @@ function pillStyle(active: boolean): CSSProperties {
   };
 }
 
-function SummaryMetric({ label, value, color, borderRight = true }: { label: string; value: number; color?: string; borderRight?: boolean }) {
+function SummaryMetric({
+  label,
+  value,
+  color,
+  borderRight = true,
+  tooltip,
+}: {
+  label: string;
+  value: number;
+  color?: string;
+  borderRight?: boolean;
+  tooltip?: string;
+}) {
+  const labelNode = (
+    <div
+      style={{
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: 9,
+        letterSpacing: "0.14em",
+        color: "#787B86",
+        marginTop: 6,
+        textAlign: "center",
+        cursor: tooltip ? "help" : undefined,
+      }}
+    >
+      {label}
+    </div>
+  );
+
   return (
     <div
       style={{
@@ -96,28 +126,85 @@ function SummaryMetric({ label, value, color, borderRight = true }: { label: str
       >
         {formatLocaleInt(value)}
       </div>
+      {tooltip ? <Tooltip content={tooltip}>{labelNode}</Tooltip> : labelNode}
+    </div>
+  );
+}
+
+function SignalBoardSkeleton() {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        padding: "16px 20px",
+        fontFamily: "'IBM Plex Mono', monospace",
+      }}
+    >
       <div
         style={{
-          fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 9,
-          letterSpacing: "0.14em",
-          color: "#787B86",
-          marginTop: 6,
-          textAlign: "center",
+          display: "grid",
+          gridTemplateColumns: "repeat(3, 1fr)",
+          gap: 8,
+          marginBottom: 8,
         }}
       >
-        {label}
+        {[1, 2, 3].map((i) => (
+          <div
+            key={i}
+            style={{
+              height: 60,
+              background: "#111318",
+              borderRadius: 2,
+              animation: "card-pulse 1.5s ease-in-out infinite",
+            }}
+          />
+        ))}
       </div>
+      {[1, 2, 3, 4, 5, 6].map((i) => (
+        <div
+          key={i}
+          style={{
+            height: 90,
+            background: "#111318",
+            borderRadius: 2,
+            animation: "card-pulse 1.5s ease-in-out infinite",
+            animationDelay: `${i * 0.1}s`,
+          }}
+        />
+      ))}
+      <style>{`@keyframes card-pulse{0%,100%{opacity:0.3}50%{opacity:0.6}}`}</style>
     </div>
   );
 }
 
 const PIPELINE_STEPS = [
-  { id: "trend" as const, label: "TREND" },
-  { id: "retracement" as const, label: "RETRACEMENT" },
-  { id: "depth" as const, label: "DEPTH" },
-  { id: "choch" as const, label: "CHOCH" },
-  { id: "candidate" as const, label: "CANDIDATE" },
+  {
+    id: "trend" as const,
+    label: "TREND",
+    tooltip: "Global trend identified on weekly/daily",
+  },
+  {
+    id: "retracement" as const,
+    label: "RETRACEMENT",
+    tooltip: "Prime retracement confirmed",
+  },
+  {
+    id: "depth" as const,
+    label: "DEPTH",
+    tooltip: "Walker depth levels identified",
+  },
+  {
+    id: "choch" as const,
+    label: "CHOCH",
+    tooltip: "Change of Character zone detected",
+  },
+  {
+    id: "candidate" as const,
+    label: "CANDIDATE",
+    tooltip: "Candidate impulse forming",
+  },
 ];
 
 function PipelineStrip({ row, flags }: { row: SignalRow; flags: ReturnType<typeof computePipelineFlags> }) {
@@ -154,18 +241,21 @@ function PipelineStrip({ row, flags }: { row: SignalRow; flags: ReturnType<typeo
                   {depthBadgeLabel(row.pullback_depth)}
                 </span>
               ) : null}
-              <span
-                style={{
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 8,
-                  letterSpacing: "0.06em",
-                  color: met ? "#787B86" : "#4A4D58",
-                  textAlign: "center",
-                  lineHeight: 1.1,
-                }}
-              >
-                {step.label}
-              </span>
+              <Tooltip content={step.tooltip}>
+                <span
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 8,
+                    letterSpacing: "0.06em",
+                    color: met ? "#787B86" : "#4A4D58",
+                    textAlign: "center",
+                    lineHeight: 1.1,
+                    cursor: "help",
+                  }}
+                >
+                  {step.label}
+                </span>
+              </Tooltip>
             </div>
             {i < PIPELINE_STEPS.length - 1 ? (
               <span style={{ color: "#4A4D58", fontSize: 10, marginTop: 1, flexShrink: 0, lineHeight: "12px" }}>
@@ -179,38 +269,12 @@ function PipelineStrip({ row, flags }: { row: SignalRow; flags: ReturnType<typeo
   );
 }
 
-function CardSkeletonGrid() {
-  const placeholders = Array.from({ length: 9 }, (_, i) => i);
-  return (
-    <div
-      className="signal-board-grid"
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-        gap: 12,
-      }}
-    >
-      {placeholders.map((i) => (
-        <div
-          key={i}
-          style={{
-            height: 148,
-            borderRadius: 2,
-            background: "#0E1014",
-            border: "1px solid #1E222D",
-            animation: "pulse 1.2s ease-in-out infinite",
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
 function SignalBoardContent() {
   const router = useRouter();
   const [trendFilter, setTrendFilter] = useState<"ALL" | "LONG" | "SHORT">("ALL");
   const [assetClassFilter, setAssetClassFilter] = useState<FilterAssetClass | "ALL">("ALL");
   const [readinessFilter, setReadinessFilter] = useState<ReadinessFilter>("ALL");
+  const [stateDrawerSymbol, setStateDrawerSymbol] = useState<string | null>(null);
 
   const setupsQuery = useQuery({
     queryKey: ["setups"],
@@ -322,9 +386,24 @@ function SignalBoardContent() {
       </div>
 
       <div style={{ display: "flex", padding: "16px 0", borderBottom: "1px solid var(--border-default)", marginBottom: 16 }}>
-        <SummaryMetric label="ALL GREEN (5/5)" value={summary.full} color="#26A69A" />
-        <SummaryMetric label="PARTIALLY READY (3–4)" value={summary.partial} color="#F5A623" />
-        <SummaryMetric label="WAITING (&lt;3)" value={summary.waiting} borderRight={false} />
+        <SummaryMetric
+          label="ALL GREEN (5/5)"
+          value={summary.full}
+          color="#26A69A"
+          tooltip="Markets with all 5 pipeline stages complete"
+        />
+        <SummaryMetric
+          label="PARTIALLY READY (3–4)"
+          value={summary.partial}
+          color="#F5A623"
+          tooltip="Markets with 3-4 pipeline stages complete"
+        />
+        <SummaryMetric
+          label="WAITING (&lt;3)"
+          value={summary.waiting}
+          borderRight={false}
+          tooltip="Markets in early trend identification only"
+        />
       </div>
 
       <div
@@ -374,7 +453,7 @@ function SignalBoardContent() {
 
       <div style={{ flex: 1, minHeight: 200 }}>
         {setupsQuery.isLoading ? (
-          <CardSkeletonGrid />
+          <SignalBoardSkeleton />
         ) : hasError ? (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 220, color: "var(--bear)", fontSize: 11 }}>
             [SYSTEM]: CONNECTION LOST
@@ -398,10 +477,17 @@ function SignalBoardContent() {
               const wf = row.waiting_for_display.length > 40 ? `${row.waiting_for_display.slice(0, 40)}…` : row.waiting_for_display;
 
               return (
-                <button
+                <div
                   key={row.id ?? row.setup_id ?? row.symbol}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => router.push(marketHref)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      router.push(marketHref);
+                    }
+                  }}
                   style={{
                     textAlign: "left",
                     background: "#0E1014",
@@ -437,6 +523,15 @@ function SignalBoardContent() {
                       >
                         {assetLabel}
                       </span>
+                      <div onClick={(e) => {
+                        e.stopPropagation();
+                        setStateDrawerSymbol(row.symbol);
+                      }}>
+                        <MarketStateBadge
+                          state={row.market_state ?? "WAITING"}
+                          onClick={() => setStateDrawerSymbol(row.symbol)}
+                        />
+                      </div>
                     </div>
                     <span style={{ fontSize: 13, fontWeight: 700, color: "#F5A623", flexShrink: 0 }}>
                       {formatScore(row.trend_score)}
@@ -457,12 +552,18 @@ function SignalBoardContent() {
                   >
                     {wf}
                   </div>
-                </button>
+                </div>
               );
             })}
           </div>
         )}
       </div>
+      <MarketStateDrawer
+        symbol={stateDrawerSymbol ?? ""}
+        state={"WAITING"}
+        isOpen={stateDrawerSymbol !== null}
+        onClose={() => setStateDrawerSymbol(null)}
+      />
     </div>
   );
 }

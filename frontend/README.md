@@ -1,36 +1,70 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Ikenga Frontend
 
-## Getting Started
+Next.js 16 (App Router) + React 19 + TailwindCSS v4. Acts as the
+operator console for the Ikenga research backend.
 
-First, run the development server:
+> The page tree mixes **live, backend-driven** views with **demo-mode**
+> surfaces. Preserve that distinction when editing — see the per-page
+> notes below.
+
+## Quick start
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev      # http://localhost:3000
+npm run build    # production build (run before commit to catch type errors)
+npm run lint
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The dev server expects the FastAPI backend at the URL in
+`NEXT_PUBLIC_API_URL` (default `http://localhost:8000`). Start the
+backend with `python scripts/run_api.py` from the repo root.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Page map
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Live (backend-driven):
 
-## Learn More
+- `app/scanner/page.tsx` — multi-symbol scanner output
+- `app/signals/page.tsx` — actionable signals derived from monitored setups
+- `app/market/page.tsx` — market cockpit
+- `app/universe/page.tsx` — universe management and bootstrap state
+- `app/deep-dive/page.tsx` — per-symbol structural analysis
+- `app/trades/page.tsx` — execution orders + events
+- `app/settings/integrations/page.tsx` — broker integration onboarding
 
-To learn more about Next.js, take a look at the following resources:
+Demo / placeholder surfaces (do not assume backend wiring):
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `app/analytics/page.tsx`
+- `app/risk/page.tsx`
+- `app/radar/page.tsx`
+- `app/watchtower/page.tsx`
+- `app/command/page.tsx`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Conventions
 
-## Deploy on Vercel
+- **HTTP**: every backend call goes through the axios client in
+  `src/lib/api.ts`. Do not add raw `fetch` calls.
+- **Types**: response shapes live in `src/lib/types.ts`. Keep them in
+  sync with the FastAPI Pydantic schemas.
+- **Charting**: `components/candle-chart.tsx` (and any other
+  `lightweight-charts` consumer) must be loaded with
+  `dynamic(() => import(...), { ssr: false })`. The library breaks
+  under SSR.
+- **Shared UI primitives** that get reused across pages belong in
+  `components/chronos-ui.tsx` and `components/ui/*`.
+- **Storage**: per-user analysis param overrides go through
+  `src/lib/analysis-params-storage.ts`.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Next.js 16 caveats
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+This is **not the Next.js you know**. Read
+[`frontend/CLAUDE.md`](CLAUDE.md) and skim
+`node_modules/next/dist/docs/` before making framework-level changes.
+APIs, conventions, and file structure differ from older Next.js
+patterns commonly seen in training data.
+
+## Agent rules
+
+For agent-specific rules (what to never do, when to run `npm run
+build`, how demo pages should be treated), see
+[`frontend/AGENTS.md`](AGENTS.md).

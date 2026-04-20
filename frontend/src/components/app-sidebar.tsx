@@ -12,6 +12,7 @@ import {
   PieChart,
   Radar,
   Shield,
+  TrendingUp,
   type LucideIcon,
 } from "lucide-react";
 
@@ -48,12 +49,24 @@ function analysisJobsActive(
 function analysisStatusMessage(
   health: HealthResponse | null,
   ranking: UniverseRankingStatus | null,
+  scanStatus: ScanStatus | null,
 ): string | null {
   if (!health && !ranking) return null;
   if (ranking?.global_structure_in_progress) return "COMPUTING GLOBAL STRUCTURE...";
   if (ranking?.prime_impulse_in_progress) return "COMPUTING PRIME IMPULSE...";
   if (ranking?.walker_in_progress) return "COMPUTING DEPTH ANALYSIS...";
-  if (health?.scan_in_progress) return "SCANNING MARKETS...";
+  if (health?.scan_in_progress) {
+    const stageUniverse = scanStatus?.stage
+      ? scanStatus.stage.includes("multi_asset")
+        ? " · MULTI-ASSET"
+        : scanStatus.stage.includes("synthetic")
+        ? " · SYNTHETIC"
+        : scanStatus.stage.includes("crypto")
+        ? " · CRYPTO"
+        : ""
+      : "";
+    return "SCANNING MARKETS" + stageUniverse + "...";
+  }
   if (ranking?.in_progress) return "RANKING UNIVERSE...";
   return null;
 }
@@ -61,14 +74,15 @@ function analysisStatusMessage(
 const PRIMARY_NAV = [
   { label: "SCANNER", href: "/scanner", icon: Radar },
   { label: "SIGNAL BOARD", href: "/signals", icon: Activity },
+  { label: "TRADES", href: "/trades", icon: TrendingUp },
   { label: "MARKET VIEW", href: "/market", icon: BarChart2 },
   { label: "UNIVERSE", href: "/universe", icon: Globe },
 ] satisfies { label: string; href: string; icon: LucideIcon }[];
 
 const SECONDARY_NAV = [
   { label: "INTEGRATIONS", href: "/settings/integrations", icon: Cable },
-  { label: "ANALYTICS", icon: PieChart },
-  { label: "RISK", icon: Shield },
+  { label: "ANALYTICS", href: "/analytics", icon: PieChart },
+  { label: "RISK", href: "/risk", icon: Shield },
 ] satisfies { label: string; href?: string; icon: LucideIcon }[];
 
 function formatCountdown(msUntil: number): string {
@@ -184,7 +198,7 @@ export function AppSidebar({ collapsed = false, onToggle, toggleIcon }: AppSideb
   const analysisHealth = analysisSnapshot?.health ?? null;
   const analysisRanking = analysisSnapshot?.ranking ?? null;
   const analysisFooterActive = analysisJobsActive(analysisHealth, analysisRanking);
-  const analysisFooterMessage = analysisStatusMessage(analysisHealth, analysisRanking);
+  const analysisFooterMessage = analysisStatusMessage(analysisHealth, analysisRanking, scanStatus);
   const showAnalysisFooter = analysisFooterActive && analysisFooterMessage;
 
   return (

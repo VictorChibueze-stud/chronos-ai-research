@@ -35,12 +35,15 @@ from src.core.choch_candidate_move import (
     structure_broken_from_close,
 )
 from src.core.trend_id import compute_internal_structure, identify_trend
-from src.db.models import GlobalStructureCache, MonitoredSetup, SignalHistory
-from src.db.session import get_db
-from src.scanner.global_structure import (
-    get_stored_global_structure,
-    get_stored_prime_impulse_structure,
+from src.db.models import (
+    CandidateImpulseCache,
+    GlobalStructureCache,
+    ManualStructureOverride,
+    MonitoredSetup,
+    PaperTrade,
 )
+from src.db.session import get_db
+from src.scanner.global_structure import get_stored_global_structure, get_stored_prime_impulse_structure
 from src.services.structure_deepening import apply_tf_deepening_to_legs
 
 logger = logging.getLogger(__name__)
@@ -58,14 +61,14 @@ STRUCTURE_INTERNAL_CHOCH_COLOR = "#FF9800"
 STRUCTURE_CANDIDATE_MOVE_COLOR = "#4DD0E1"
 
 FILTER_CONFIG: dict[str, Any] = dict(SCAN_AND_ANALYSIS_FILTER_DEFAULTS)
-# Market View debug (GET /api/analysis/{symbol} query overrides) — baseline inventory:
-# - FILTER_CONFIG keys → identify_trend, compute_internal_structure, walk_structure (filter_config),
+# Market View debug (GET /api/analysis/{symbol} query overrides) â€” baseline inventory:
+# - FILTER_CONFIG keys â†’ identify_trend, compute_internal_structure, walk_structure (filter_config),
 #   _enrich_internal_structure_with_tf_deepening (same six keys; fine-TF deepening keeps tcp=0.005).
-# - Optional queries min_swing_candles, trend_confirmation_pct → main chart identify/compute only
+# - Optional queries min_swing_candles, trend_confirmation_pct â†’ main chart identify/compute only
 #   (defaults: min_swing_candles=3, outer trend_confirmation_pct=0.03; internal slices in core use 0.005).
-# - max_walk_depth → walk_structure(..., max_depth=...) (router default 3).
-# - rmt_* queries → walk_structure(..., rmt_filter_config=...) else RMT_DEFAULT_FILTER_CONFIG in walker.
-# - symbol → walk_structure(..., symbol=...) for adapter-routed TF deepening; optional deepening_timeframes.
+# - max_walk_depth â†’ walk_structure(..., max_depth=...) (router default 3).
+# - rmt_* queries â†’ walk_structure(..., rmt_filter_config=...) else RMT_DEFAULT_FILTER_CONFIG in walker.
+# - symbol â†’ walk_structure(..., symbol=...) for adapter-routed TF deepening; optional deepening_timeframes.
 
 _DEFAULT_WALK_DEPTH = 3
 
@@ -77,7 +80,7 @@ def _try_stored_walker_json(
     rmt_kw: dict[str, Any] | None,
     walk_depth: int,
 ) -> dict[str, Any] | None:
-    """Return deep-copied serialized walker state if cache hit and candle TF matches."""
+    """Return deep-copied serialized walker state when default walker params are used."""
     if rmt_kw is not None or walk_depth != _DEFAULT_WALK_DEPTH:
         return None
     sw = get_stored_walker(symbol_upper, db)
@@ -85,8 +88,6 @@ def _try_stored_walker_json(
         return None
     raw = sw.walker_state_json
     if not isinstance(raw, dict) or not raw:
-        return None
-    if sw.source_timeframe.strip().lower() != candle_tf_lower.strip().lower():
         return None
     return copy.deepcopy(raw)
 
@@ -553,7 +554,7 @@ def _compute_new_move_analysis(
 ) -> dict[str, Any] | None:
     """
     Analyze the move from the CHoCH extreme to current price.
-    This is the candidate next impulse — the entry signal source.
+    This is the candidate next impulse â€” the entry signal source.
     Uses crossing_attempt from depth 1 of the structural walk.
     """
     levels = state_report.get("levels", [])
@@ -670,7 +671,7 @@ def _serialize_trend_legs_structure(
         payload = _serialize_trend_legs_structure(candles, result, state_report)
 
     Optional ``state_report`` is serialized walker output (``structural_state_json`` shape)
-    with ``levels`` — used for ``choch_zones`` overlays.
+    with ``levels`` â€” used for ``choch_zones`` overlays.
 
     ``structure_color_override`` (e.g. teal for CHoCH candidate move) sets CHoCH band and BOS line colors.
 
@@ -1022,6 +1023,113 @@ def _candidate_new_move_active(new_move: dict[str, Any] | None) -> bool:
     return any(isinstance(l, dict) and bool(l.get("confirmed")) for l in legs)
 
 
+def get_stored_candidate_impulse(symbol: str, db: Session) -> CandidateImpulseCache | None:
+    sym = symbol.strip().upper()
+    return (
+        db.query(CandidateImpulseCache)
+        .filter(CandidateImpulseCache.symbol == sym)
+        .one_or_none()
+    )
+
+
+def _last_global_bos_price(legs: list[dict[str, Any]] | None) -> float | None:
+    for leg in reversed(legs or []):
+        if not isinstance(leg, dict):
+            continue
+        if leg.get("type") == "impulse" and leg.get("confirmed") and leg.get("end_price") is not None:
+            try:
+                return float(leg["end_price"])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _build_candidate_from_cache(
+    candidate_cache: CandidateImpulseCache,
+    chart_candles: list,
+    global_trend: str,
+    reference_bos_price: float | None,
+) -> dict[str, Any] | None:
+    if candidate_cache is None:
+        return None
+
+    start_ts = candidate_cache.start_timestamp
+    if start_ts.tzinfo is None:
+        start_ts = start_ts.replace(tzinfo=timezone.utc)
+    pivot_idx = _nearest_candle_index(chart_candles, start_ts) if chart_candles else None
+
+    candidate_legs_raw = list(candidate_cache.legs_json or [])
+    candidate_legs: list[dict[str, Any]] = []
+    for leg in candidate_legs_raw:
+        if not isinstance(leg, dict):
+            continue
+        enriched = dict(leg)
+        enriched["render_style"] = "candidate"
+        candidate_legs.append(enriched)
+    candidate_bos_levels = list(candidate_cache.bos_levels_json or [])
+    candidate_choch_zone = candidate_cache.choch_zone_json if isinstance(candidate_cache.choch_zone_json, dict) else None
+    candidate_prime_impulse = (
+        copy.deepcopy(candidate_cache.prime_impulse_json)
+        if isinstance(candidate_cache.prime_impulse_json, dict)
+        else None
+    )
+    candidate_prime_choch_zone = candidate_cache.prime_choch_zone_json if isinstance(candidate_cache.prime_choch_zone_json, dict) else None
+    if isinstance(candidate_prime_impulse, dict) and candidate_prime_choch_zone is not None:
+        candidate_prime_impulse.setdefault("choch_zone", copy.deepcopy(candidate_prime_choch_zone))
+
+    confirmed_count = sum(
+        1 for leg in candidate_legs if isinstance(leg, dict) and bool(leg.get("confirmed"))
+    )
+    last_confirmed = None
+    for leg in reversed(candidate_legs):
+        if isinstance(leg, dict) and leg.get("confirmed"):
+            last_confirmed = leg
+            break
+    candidate_phase = str(last_confirmed.get("type")) if isinstance(last_confirmed, dict) and last_confirmed.get("type") else None
+
+    current_price = float(chart_candles[-1].close) if chart_candles else None
+    candidate_ichoch = None
+    if current_price is not None and candidate_prime_choch_zone:
+        candidate_ichoch = _candidate_ichoch_reached(global_trend, {"internal_choch_zone": candidate_prime_choch_zone}, current_price)
+
+    teal_structure = {
+        "legs": candidate_legs,
+        "bos_levels": candidate_bos_levels,
+        "global_choch_zone": candidate_choch_zone,
+        "internal_choch_zone": candidate_prime_choch_zone,
+        "render_style": "candidate",
+    }
+    if teal_structure and teal_structure.get("legs"):
+        teal_structure = {
+            **teal_structure,
+            "legs": [
+                {**leg, "render_style": "candidate"}
+                for leg in teal_structure["legs"]
+            ],
+        }
+
+    return {
+        "pivot_index": pivot_idx,
+        "pivot_price": float(candidate_cache.start_price),
+        "move_start_timestamp": start_ts.isoformat(),
+        "reference_bos_price": reference_bos_price,
+        "reference_bos_start_index": None,
+        "structure_broken": candidate_cache.structure_broken,
+        "teal_structure": teal_structure,
+        "candidate_ichoch_reached": candidate_ichoch,
+        "candidate_new_move_active": confirmed_count >= 2,
+        "candidate_legs": candidate_legs,
+        "candidate_bos_levels": candidate_bos_levels,
+        "candidate_choch_zone": candidate_choch_zone,
+        "candidate_prime_impulse": candidate_prime_impulse,
+        "candidate_prime_choch_zone": candidate_prime_choch_zone,
+        "candidate_walker": candidate_cache.candidate_walker_json,
+        "choch_source": candidate_cache.choch_source,
+        "trend": global_trend,
+        "phase": candidate_phase,
+    }
+
+
 def _build_candidate_move_attachment(
     candles: list,
     result: dict[str, Any],
@@ -1299,7 +1407,7 @@ def get_signal_history(
     q = (
         db.query(SignalHistory)
         .filter(SignalHistory.symbol == normalized)
-        .order_by(SignalHistory.emitted_at.desc(), SignalHistory.id.desc())
+        .order_by(SignalHistory.emitted_at.desc().id.desc())
     )
     if timeframe:
         q = q.filter(SignalHistory.timeframe == timeframe)
@@ -1319,6 +1427,110 @@ def get_signal_history(
             for row in rows
         ],
     }
+
+
+def _compute_bos_classifications(
+    structural_state: dict,
+    candles: list,
+    trend: str,
+) -> dict[str, str]:
+    classifications: dict[str, str] = {}
+    levels = structural_state.get("levels") or []
+    for level in levels:
+        depth = level.get("depth", 1)
+        struct_lvl = level.get("structural_level") or {}
+        bos_price = struct_lvl.get("price")
+        crossing = level.get("crossing_attempt") or {}
+
+        if not bos_price or not candles:
+            classifications[f"depth_{depth}"] = "pending"
+            continue
+
+        if not crossing:
+            classifications[f"depth_{depth}"] = "pending"
+            continue
+
+        g_cross_end = crossing.get("global_end_index")
+        if g_cross_end is None or g_cross_end >= len(candles):
+            classifications[f"depth_{depth}"] = "pending"
+            continue
+
+        post_candles = candles[int(g_cross_end):]
+        bos_price_f = float(bos_price)
+
+        price_returned = any(
+            (trend == "up" and c.high > bos_price_f) or
+            (trend == "down" and c.low < bos_price_f)
+            for c in post_candles
+        )
+
+        if price_returned:
+            classifications[f"depth_{depth}"] = "false"
+        elif len(post_candles) > 3:
+            classifications[f"depth_{depth}"] = "true"
+        else:
+            classifications[f"depth_{depth}"] = "pending"
+
+    return classifications
+
+
+def _get_open_paper_trade(
+    symbol: str,
+    db: Session,
+) -> dict | None:
+    trade = (
+        db.query(PaperTrade)
+        .filter(
+            PaperTrade.symbol == symbol,
+            PaperTrade.status == "open",
+        )
+        .first()
+    )
+    if trade is None:
+        return None
+    return {
+        "entry_price": trade.entry_price,
+        "stop_price": trade.stop_price,
+        "take_profit_price": trade.take_profit_price,
+        "direction": trade.direction,
+        "status": trade.status,
+    }
+
+
+def _get_active_overrides(
+    symbol: str,
+    db: Session,
+) -> dict[str, dict]:
+    """
+    Return active manual overrides for symbol as a dict keyed by override_type.
+    Example: {"global_choch": {...}, "ichoch": {...}}
+    """
+    rows = (
+        db.query(ManualStructureOverride)
+        .filter(
+            ManualStructureOverride.symbol == symbol,
+            ManualStructureOverride.is_active.is_(True),
+        )
+        .all()
+    )
+    result: dict[str, dict] = {}
+    for row in rows:
+        result[row.override_type] = {
+            "lower_boundary": row.lower_boundary,
+            "upper_boundary": row.upper_boundary,
+            "start_timestamp": row.start_timestamp.isoformat()
+            if row.start_timestamp else None,
+            "end_timestamp": row.end_timestamp.isoformat()
+            if row.end_timestamp else None,
+            "trend_start_timestamp":
+                row.trend_start_timestamp.isoformat()
+                if row.trend_start_timestamp else None,
+            "trend_end_timestamp":
+                row.trend_end_timestamp.isoformat()
+                if row.trend_end_timestamp else None,
+            "depth_index": row.depth_index,
+        }
+    return result
 
 
 @router.get("/{symbol}")
@@ -1386,9 +1598,131 @@ def get_analysis(
         .first()
     )
     if setup is None:
+        try:
+            candles = _get_candles_from_store(db, symbol_upper, timeframe_lower)
+        except HTTPException:
+            raise
+
+        if not candles:
+            raise HTTPException(
+                status_code=422,
+                detail=f"No candles returned for symbol={symbol_upper} timeframe={timeframe_lower}",
+            )
+
+        cache_bundle = _try_global_cache_result(symbol_upper, db, candles)
+        if cache_bundle is None:
+            return {
+                "status": "not_found",
+                "symbol": symbol_upper,
+                "open_paper_trade": _get_open_paper_trade(symbol_upper, db),
+            }
+
+        result, ref_candles, gsc = cache_bundle
+        confirmed_impulses = [
+            l for l in result.get("legs", [])
+            if l.get("type") == "impulse" and l.get("confirmed")
+            and l.get("internal_structure") is not None
+        ]
+        _did_compute_internal = not confirmed_impulses
+        if not confirmed_impulses:
+            compute_internal_structure(candles, result["legs"], **trend_kw)
+        _stored_walker_exists = get_stored_walker(symbol_upper, db) is not None
+        if not _stored_walker_exists:
+            _enrich_internal_structure_with_tf_deepening(
+                candles, result["legs"], trend_kw, symbol_upper
+            )
+        if _did_compute_internal:
+            compute_internal_structure_levels(candles, result["legs"])
+
+        stored_walk = _try_stored_walker_json(
+            db, symbol_upper, timeframe_lower, rmt_kw, walk_depth
+        )
+        if stored_walk is not None:
+            state = stored_walk
+            state_report = state
+        else:
+            state_report = walk_structure(
+                candles,
+                result,
+                trend_kw,
+                symbol=symbol_upper,
+                **walk_extras,
+            )
+            state = serialize_state_report(state_report)
+
+        if _stored_walker_exists:
+            new_move = None
+        else:
+            new_move = _compute_new_move_analysis(
+                candles, state_report, symbol_upper, trend_kw
+            )
+
+        prime_kw = _prime_serializer_kwargs(symbol_upper, db)
+        leg_payload = _serialize_trend_legs_structure(
+            candles,
+            result,
+            state,
+            cached_globals=True,
+            bos_raw_cached=gsc.bos_levels_json or [],
+            choch_level_cached=gsc.choch_level_json,
+            global_choch_zone_cached=gsc.choch_zone_json,
+            ref_candles=ref_candles,
+            **prime_kw,
+        )
+
+        candidate_cache = get_stored_candidate_impulse(symbol_upper, db)
+        if candidate_cache is not None:
+            candidate_move = _build_candidate_from_cache(
+                candidate_cache,
+                candles,
+                str(gsc.trend_direction or result.get("trend") or "range"),
+                _last_global_bos_price(gsc.legs_json or result.get("legs") or []),
+            )
+        elif not _stored_walker_exists:
+            candidate_move = _build_candidate_move_attachment(
+                candles,
+                result,
+                leg_payload,
+                trend_kw,
+                symbol_upper,
+                new_move=new_move,
+            )
+        else:
+            candidate_move = None
+
+        max_depth_reached = int(state.get("max_depth_reached", 0) or 0)
+        total_mitigation_count = int(state.get("total_mitigation_count", 0) or 0)
+        waiting_for = state.get("waiting_for", "")
+        prime_impulse_structure = None
+        if prime_kw.get("prime_legs_json"):
+            prime_impulse_structure = {
+                "legs": prime_kw["prime_legs_json"],
+                "source_tf": prime_kw.get("prime_source_tf"),
+                "choch_zone": prime_kw.get("prime_choch_zone_json"),
+            }
+        bos_classifications = _compute_bos_classifications(
+            state, candles, str(gsc.trend_direction or result.get("trend") or "up")
+        )
+
         return {
-            "status": "not_found",
+            "status": "ok",
             "symbol": symbol_upper,
+            "timeframe": timeframe_lower,
+            "global_trend": gsc.trend_direction,
+            "reference_timeframe": gsc.reference_timeframe,
+            "max_depth_reached": max_depth_reached,
+            "total_mitigation_count": total_mitigation_count,
+            "waiting_for": waiting_for,
+            "structural_state": state,
+            "new_move": new_move,
+            "live_computed": False,
+            "candidate_move": candidate_move,
+            "prime_impulse_structure": prime_impulse_structure,
+            "bos_classifications": bos_classifications,
+            "market_state": (gsc.market_state if gsc is not None else "WAITING"),
+            "open_paper_trade": _get_open_paper_trade(symbol_upper, db),
+            "manual_overrides": _get_active_overrides(symbol_upper, db),
+            **leg_payload,
         }
 
     stored_tf = (setup.htf_timeframe or "").lower()
@@ -1413,13 +1747,25 @@ def get_analysis(
         else:
             leg_result = identify_trend(leg_candles, **trend_kw)
             ref_candles = []
-        compute_internal_structure(leg_candles, leg_result["legs"], **trend_kw)
+        confirmed_impulses = (
+            [
+                l for l in leg_result.get("legs", [])
+                if l.get("type") == "impulse" and l.get("confirmed")
+                and l.get("internal_structure") is not None
+            ]
+            if cache_bundle is not None
+            else []
+        )
+        _did_compute_internal = not confirmed_impulses
+        if not confirmed_impulses:
+            compute_internal_structure(leg_candles, leg_result["legs"], **trend_kw)
         _stored_walker_exists = get_stored_walker(symbol_upper, db) is not None
         if not _stored_walker_exists:
             _enrich_internal_structure_with_tf_deepening(
                 leg_candles, leg_result["legs"], trend_kw, symbol_upper
             )
-        compute_internal_structure_levels(leg_candles, leg_result["legs"])
+        if _did_compute_internal:
+            compute_internal_structure_levels(leg_candles, leg_result["legs"])
         stored_walk = _try_stored_walker_json(
             db, symbol_upper, fetch_tf.lower(), rmt_kw, walk_depth
         )
@@ -1438,9 +1784,12 @@ def get_analysis(
         max_depth_reached = int(state.get("max_depth_reached", 0) or 0)
         total_mitigation_count = int(state.get("total_mitigation_count", 0) or 0)
         waiting_for = state.get("waiting_for", "")
-        new_move = _compute_new_move_analysis(
-            leg_candles, state_report, symbol_upper, trend_kw
-        )
+        if _stored_walker_exists:
+            new_move = None
+        else:
+            new_move = _compute_new_move_analysis(
+                leg_candles, state_report, symbol_upper, trend_kw
+            )
         prime_kw = _prime_serializer_kwargs(symbol_upper, db)
         if cache_bundle is not None:
             leg_payload = _serialize_trend_legs_structure(
@@ -1458,17 +1807,40 @@ def get_analysis(
             leg_payload = _serialize_trend_legs_structure(
                 leg_candles, leg_result, state, **prime_kw
             )
-        candidate_move = _build_candidate_move_attachment(
-            leg_candles,
-            leg_result,
-            leg_payload,
-            trend_kw,
-            symbol_upper,
-            new_move=new_move,
-        )
+        candidate_cache = get_stored_candidate_impulse(symbol_upper, db)
+        if candidate_cache is not None:
+            candidate_move = _build_candidate_from_cache(
+                candidate_cache,
+                leg_candles,
+                str(global_trend or leg_result.get("trend") or "range"),
+                _last_global_bos_price(
+                    (cache_bundle[2].legs_json if cache_bundle is not None else leg_result.get("legs")) or []
+                ),
+            )
+        elif _stored_walker_exists:
+            candidate_move = None
+        else:
+            candidate_move = _build_candidate_move_attachment(
+                leg_candles,
+                leg_result,
+                leg_payload,
+                trend_kw,
+                symbol_upper,
+                new_move=new_move,
+            )
 
         reference_timeframe = (
             cache_bundle[2].reference_timeframe if cache_bundle is not None else None
+        )
+        prime_impulse_structure = None
+        if prime_kw.get("prime_legs_json"):
+            prime_impulse_structure = {
+                "legs": prime_kw["prime_legs_json"],
+                "source_tf": prime_kw.get("prime_source_tf"),
+                "choch_zone": prime_kw.get("prime_choch_zone_json"),
+            }
+        bos_classifications = _compute_bos_classifications(
+            state, leg_candles, str(global_trend or "up")
         )
 
         return {
@@ -1484,6 +1856,11 @@ def get_analysis(
             "new_move": new_move,
             "live_computed": False,
             "candidate_move": candidate_move,
+            "prime_impulse_structure": prime_impulse_structure,
+            "bos_classifications": bos_classifications,
+            "market_state": (cache_bundle[2].market_state if cache_bundle is not None else "WAITING"),
+            "open_paper_trade": _get_open_paper_trade(symbol_upper, db),
+            "manual_overrides": _get_active_overrides(symbol_upper, db),
             **leg_payload,
         }
 
@@ -1504,13 +1881,25 @@ def get_analysis(
     else:
         result = identify_trend(candles, **trend_kw)
         ref_candles = []
-    compute_internal_structure(candles, result["legs"], **trend_kw)
+    confirmed_impulses = (
+        [
+            l for l in result.get("legs", [])
+            if l.get("type") == "impulse" and l.get("confirmed")
+            and l.get("internal_structure") is not None
+        ]
+        if cache_bundle is not None
+        else []
+    )
+    _did_compute_internal = not confirmed_impulses
+    if not confirmed_impulses:
+        compute_internal_structure(candles, result["legs"], **trend_kw)
     _stored_walker_exists = get_stored_walker(symbol_upper, db) is not None
     if not _stored_walker_exists:
         _enrich_internal_structure_with_tf_deepening(
             candles, result["legs"], trend_kw, symbol_upper
         )
-    compute_internal_structure_levels(candles, result["legs"])
+    if _did_compute_internal:
+        compute_internal_structure_levels(candles, result["legs"])
     stored_walk = _try_stored_walker_json(
         db, symbol_upper, timeframe_lower, rmt_kw, walk_depth
     )
@@ -1526,9 +1915,12 @@ def get_analysis(
             **walk_extras,
         )
         state = serialize_state_report(state_report)
-    new_move = _compute_new_move_analysis(
-        candles, state_report, symbol_upper, trend_kw
-    )
+    if _stored_walker_exists:
+        new_move = None
+    else:
+        new_move = _compute_new_move_analysis(
+            candles, state_report, symbol_upper, trend_kw
+        )
     prime_kw = _prime_serializer_kwargs(symbol_upper, db)
     if cache_bundle is not None:
         leg_payload = _serialize_trend_legs_structure(
@@ -1546,20 +1938,43 @@ def get_analysis(
     else:
         leg_payload = _serialize_trend_legs_structure(candles, result, state, **prime_kw)
         global_trend = state.get("global_trend", result.get("trend", "range"))
-    candidate_move = _build_candidate_move_attachment(
-        candles,
-        result,
-        leg_payload,
-        trend_kw,
-        symbol_upper,
-        new_move=new_move,
-    )
+    candidate_cache = get_stored_candidate_impulse(symbol_upper, db)
+    if candidate_cache is not None:
+        candidate_move = _build_candidate_from_cache(
+            candidate_cache,
+            candles,
+            str(global_trend or result.get("trend") or "range"),
+            _last_global_bos_price(
+                (cache_bundle[2].legs_json if cache_bundle is not None else result.get("legs")) or []
+            ),
+        )
+    elif _stored_walker_exists:
+        candidate_move = None
+    else:
+        candidate_move = _build_candidate_move_attachment(
+            candles,
+            result,
+            leg_payload,
+            trend_kw,
+            symbol_upper,
+            new_move=new_move,
+        )
     max_depth_reached = int(state.get("max_depth_reached", 0) or 0)
     total_mitigation_count = int(state.get("total_mitigation_count", 0) or 0)
     waiting_for = state.get("waiting_for", "")
 
     reference_timeframe = (
         cache_bundle[2].reference_timeframe if cache_bundle is not None else None
+    )
+    prime_impulse_structure = None
+    if prime_kw.get("prime_legs_json"):
+        prime_impulse_structure = {
+            "legs": prime_kw["prime_legs_json"],
+            "source_tf": prime_kw.get("prime_source_tf"),
+            "choch_zone": prime_kw.get("prime_choch_zone_json"),
+        }
+    bos_classifications = _compute_bos_classifications(
+        state, candles, str(global_trend or "up")
     )
 
     return {
@@ -1575,5 +1990,10 @@ def get_analysis(
         "new_move": new_move,
         "live_computed": True,
         "candidate_move": candidate_move,
+        "prime_impulse_structure": prime_impulse_structure,
+        "bos_classifications": bos_classifications,
+        "market_state": (cache_bundle[2].market_state if cache_bundle is not None else "WAITING"),
+        "open_paper_trade": _get_open_paper_trade(symbol_upper, db),
+        "manual_overrides": _get_active_overrides(symbol_upper, db),
         **leg_payload,
     }

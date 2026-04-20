@@ -237,8 +237,16 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
             })}
           </div>
         </div>
-        <StatCard label="IN RETRACEMENT" value={formatLocaleInt(stats.by_phase.retracement)} sub="entry zones active" />
-        <StatCard label="DEPTH 3 CONFIRMED" value={formatLocaleInt(stats.by_depth.depth_3)} sub="highest conviction" highlight />
+        <Tooltip content="Markets in confirmed prime retracement">
+          <span style={{ display: "block", flex: 1, cursor: "help" }}>
+            <StatCard label="IN RETRACEMENT" value={formatLocaleInt(stats.by_phase.retracement)} sub="entry zones active" />
+          </span>
+        </Tooltip>
+        <Tooltip content="Markets where walker found this depth level">
+          <span style={{ display: "block", flex: 1, cursor: "help" }}>
+            <StatCard label="DEPTH 3 CONFIRMED" value={formatLocaleInt(stats.by_depth.depth_3)} sub="highest conviction" highlight />
+          </span>
+        </Tooltip>
       </section>
 
       <section className="mb-4 border border-[#363A45] bg-[#1E222D] p-4">

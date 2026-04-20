@@ -20,7 +20,12 @@ from sqlalchemy.orm import Session
 
 from src.adapters.binance_data import fetch_binance_ohlc_sync
 from src.adapters.deriv_data import fetch_deriv_ohlc_sync
-from src.adapters.yfinance_data import fetch_yfinance_ohlc_sync, is_yfinance_symbol
+from src.adapters.yfinance_data import (
+    fetch_yfinance_ohlc_sync,
+    get_display_name,
+    get_sector,
+    is_yfinance_symbol,
+)
 from src.core.filter_defaults import SCAN_AND_ANALYSIS_FILTER_DEFAULTS
 from src.core.structural_walker import serialize_state_report, walk_structure
 from src.core.features import compute_ema
@@ -28,14 +33,26 @@ from src.core.trend_id import compute_internal_structure, identify_trend
 from src.api.universe_readiness import build_readiness_index, merge_readiness_fields
 from src.db.models import (
     ActiveUniverseSymbol,
+    GlobalStructureCache,
     MonitoredSetup,
     ScanSettings,
     ScanSettingsHistory,
     SignalHistory,
     UniverseBootstrapFailure,
     UniverseScore,
+    UniverseSettings,
 )
-from src.scanner.global_structure import upsert_stored_walker_result
+from src.cache.candle_store import refresh_candles
+from src.scanner.global_structure import (
+    compute_and_write_market_state,
+    compute_candidate_impulse_for_symbol,
+    compute_global_structure_for_symbol,
+    compute_prime_impulse_structure,
+    compute_walker_for_symbol,
+    get_stored_candidate_impulse,
+    get_stored_global_structure,
+    upsert_stored_walker_result,
+)
 from src.services.structure_deepening import apply_tf_deepening_to_legs
 from src.db.session import SessionLocal, get_db
 from src.scanner.market_scanner import (
@@ -148,6 +165,7 @@ _scan_status = {
     "started_at": None,
     "completed_at": None,
     "last_error": None,
+    "paper_engine": None,
 }
 
 _UNIVERSE_CACHE_TTL_SECONDS = 300
@@ -160,6 +178,85 @@ _universe_cache: dict[str, Any] = {
 
 _COMMODITIES_SYMBOLS = {"XAUUSD", "XAGUSD", "USOIL", "UKOIL", "NGAS"}
 _INDICES_SYMBOLS = {"NAS100", "SPX500", "GER40", "UK100", "JP225"}
+YFINANCE_CATEGORY_MAP: dict[str, str] = {
+    # Stock indices
+    "SPX500": "indices",
+    "NAS100": "indices",
+    "DAX40": "indices",
+    "FTSE100": "indices",
+    "NKY225": "indices",
+    "HSI": "indices",
+    "CAC40": "indices",
+    "ASX200": "indices",
+    # Forex — all FRX prefix symbols
+    "FRXEURUSD": "forex",
+    "FRXGBPUSD": "forex",
+    "FRXUSDJPY": "forex",
+    "FRXUSDCHF": "forex",
+    "FRXAUDUSD": "forex",
+    "FRXUSDCAD": "forex",
+    "FRXNZDUSD": "forex",
+    "FRXEURGBP": "forex",
+    "FRXEURJPY": "forex",
+    "FRXEURCHF": "forex",
+    "FRXEURAUD": "forex",
+    "FRXEURCAD": "forex",
+    "FRXEURNZD": "forex",
+    "FRXGBPJPY": "forex",
+    "FRXGBPCHF": "forex",
+    "FRXGBPAUD": "forex",
+    "FRXGBPCAD": "forex",
+    "FRXGBPNZD": "forex",
+    "FRXAUDJPY": "forex",
+    "FRXAUDNZD": "forex",
+    "FRXAUDCAD": "forex",
+    "FRXCADJPY": "forex",
+    "FRXCHFJPY": "forex",
+    "FRXNZDJPY": "forex",
+    "FRXUSDSGD": "forex",
+    "FRXUSDHKD": "forex",
+    "FRXUSDMXN": "forex",
+    "FRXUSDSEK": "forex",
+    "FRXUSDNOK": "forex",
+    "FRXUSDDKK": "forex",
+    "FRXEURSEK": "forex",
+    "FRXEURNOK": "forex",
+    # Commodities
+    "FRXXAUUSD": "commodity",
+    "XAUUSD": "commodity",
+    "XAGUSD": "commodity",
+    "USOIL": "commodity",
+    "UKOIL": "commodity",
+    "NGAS": "commodity",
+    # Additional indices
+    "US30":    "indices",
+    "UK100":   "indices",
+    "HK50":    "indices",
+    # Forex exotics
+    "FRXUSDZAR": "forex",
+    "FRXEURTRY": "forex",
+    # Equities
+    "AAPL":  "equities",
+    "MSFT":  "equities",
+    "GOOGL": "equities",
+    "META":  "equities",
+    "NVDA":  "equities",
+    "TSLA":  "equities",
+    "AMZN":  "equities",
+    "HD":    "equities",
+    "JPM":   "equities",
+    "V":     "equities",
+    "MA":    "equities",
+    "BAC":   "equities",
+    "JNJ":   "equities",
+    "UNH":   "equities",
+    "PFE":   "equities",
+    "XOM":   "equities",
+    "CVX":   "equities",
+    "CAT":   "equities",
+    "NFLX":  "equities",
+    "SBUX":  "equities",
+}
 DERIV_SYNTHETIC_PREFIXES = (
     "R_",
     "1HZ",
@@ -176,16 +273,24 @@ DERIV_SYNTHETIC_PREFIXES = (
 )
 
 ALLOWED_BROKERS = {"binance", "deriv", "yfinance"}
-ALLOWED_DERIV_CATEGORIES = {"forex", "synthetic", "commodity", "indices", "crypto", "stocks", "etfs"}
+ALLOWED_DERIV_CATEGORIES = {
+    "forex", "synthetic", "commodity",
+    "indices", "crypto", "stocks", "etfs",
+    "equities",
+}
 
 MONITORED_CAPACITY = 50
-CATEGORY_MIN_SLOT_KEYS = ("forex", "commodity", "indices", "synthetic", "crypto")
+CATEGORY_MIN_SLOT_KEYS = (
+    "forex", "commodity", "indices",
+    "synthetic", "crypto", "equities",
+)
 DEFAULT_CATEGORY_MIN_SLOTS: dict[str, int] = {
-    "forex": 5,
+    "forex":     5,
     "commodity": 3,
-    "indices": 3,
+    "indices":   3,
     "synthetic": 5,
-    "crypto": 0,
+    "crypto":    0,
+    "equities":  0,
 }
 
 DEFAULT_SCAN_SETTINGS: dict[str, Any] = {
@@ -198,11 +303,19 @@ DEFAULT_SCAN_SETTINGS: dict[str, Any] = {
         "price_ratio_weight": 0.7,
         "bar_ratio_weight": 0.3,
     },
+    "scoring_profile": "balanced",
+    "scoring_layer_weights": {
+        "state_weight": 0.50,
+        "opportunity_weight": 0.35,
+        "structure_weight": 0.15,
+    },
     "retracement_bonus": 10.0,
     "deriv_category_overrides": {},
     "enable_correlation_filter": False,
     "universe_scan_frequency": "daily",
     "active_refresh_hours": 4,
+    "deep_analysis_refresh_hours": 24,
+    "non_top50_analysis_depth": "global_and_prime",
     "category_min_slots": dict(DEFAULT_CATEGORY_MIN_SLOTS),
 }
 
@@ -221,11 +334,19 @@ class ScanSettingsPayload(BaseModel):
     include_symbols: list[str] = Field(default_factory=list)
     exclude_symbols: list[str] = Field(default_factory=list)
     score_weights: ScoreWeights = Field(default_factory=ScoreWeights)
+    scoring_profile: str = Field(default="balanced")
+    scoring_layer_weights: dict[str, float] = Field(default_factory=lambda: {
+        "state_weight": 0.50,
+        "opportunity_weight": 0.35,
+        "structure_weight": 0.15,
+    })
     retracement_bonus: float = Field(default=10.0, ge=0.0, le=100.0)
     deriv_category_overrides: dict[str, str] = Field(default_factory=dict)
     enable_correlation_filter: bool = False
     universe_scan_frequency: str = Field(default="daily")
     active_refresh_hours: int = Field(default=4)
+    deep_analysis_refresh_hours: int = Field(default=24)
+    non_top50_analysis_depth: str = Field(default="global_and_prime")
 
 
 class ScanRequest(BaseModel):
@@ -302,6 +423,51 @@ def _normalize_scan_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
         "bar_ratio_weight": bar_w / total,
     }
 
+    valid_profiles = {"aggressive", "balanced", "conservative", "custom"}
+    profile = str(data.get("scoring_profile", "balanced")).lower()
+    data["scoring_profile"] = (
+        profile if profile in valid_profiles else "balanced"
+    )
+
+    PROFILE_WEIGHTS = {
+        "aggressive": {"state": 0.40, "opportunity": 0.50, "structure": 0.10},
+        "balanced": {"state": 0.50, "opportunity": 0.35, "structure": 0.15},
+        "conservative": {"state": 0.30, "opportunity": 0.25, "structure": 0.45},
+    }
+    if profile in PROFILE_WEIGHTS:
+        pw = PROFILE_WEIGHTS[profile]
+        data["scoring_layer_weights"] = {
+            "state_weight": pw["state"],
+            "opportunity_weight": pw["opportunity"],
+            "structure_weight": pw["structure"],
+        }
+    else:
+        lw = data.get("scoring_layer_weights") or {}
+        try:
+            sw = float(lw.get("state_weight", 0.50))
+        except (TypeError, ValueError):
+            sw = 0.50
+        try:
+            ow = float(lw.get("opportunity_weight", 0.35))
+        except (TypeError, ValueError):
+            ow = 0.35
+        try:
+            qw = float(lw.get("structure_weight", 0.15))
+        except (TypeError, ValueError):
+            qw = 0.15
+        sw = max(0.0, min(1.0, sw))
+        ow = max(0.0, min(1.0, ow))
+        qw = max(0.0, min(1.0, qw))
+        wsum = sw + ow + qw
+        if wsum <= 0:
+            sw, ow, qw = 0.50, 0.35, 0.15
+            wsum = 1.0
+        data["scoring_layer_weights"] = {
+            "state_weight": sw / wsum,
+            "opportunity_weight": ow / wsum,
+            "structure_weight": qw / wsum,
+        }
+
     try:
         bonus = float(data.get("retracement_bonus", DEFAULT_SCAN_SETTINGS["retracement_bonus"]))
     except (TypeError, ValueError):
@@ -328,6 +494,25 @@ def _normalize_scan_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     except (TypeError, ValueError):
         refresh_h = 4
     data["active_refresh_hours"] = refresh_h if refresh_h in {1, 2, 4, 8, 12, 24} else 4
+
+    valid_depths = {
+        "global_only",
+        "global_and_prime",
+        "global_prime_walker",
+        "full_chain",
+    }
+    depth = str(data.get("non_top50_analysis_depth", "global_and_prime"))
+    data["non_top50_analysis_depth"] = (
+        depth if depth in valid_depths else "global_and_prime"
+    )
+
+    try:
+        deep_h = int(data.get("deep_analysis_refresh_hours", 24))
+    except (TypeError, ValueError):
+        deep_h = 24
+    data["deep_analysis_refresh_hours"] = (
+        deep_h if deep_h in {4, 8, 12, 24, 48, 72} else 24
+    )
 
     raw_mins = data.get("category_min_slots") or {}
     slot_out: dict[str, int] = {}
@@ -406,7 +591,7 @@ def _derive_deriv_category(
         return override
 
     if is_yfinance_symbol(sym):
-        return "indices"
+        return YFINANCE_CATEGORY_MAP.get(sym, "indices")
 
     # 1) API metadata when available
     market_l = str(market or "").lower()
@@ -484,32 +669,94 @@ def _build_scan_symbol_universe(settings: dict[str, Any]) -> tuple[list[str], se
     return final_symbols, deriv_active_symbols
 
 
-def _compute_hybrid_trend_score(result: dict[str, Any], settings: dict[str, Any]) -> tuple[float, dict[str, float]]:
-    legs = [l for l in (result.get("legs") or []) if l.get("confirmed")]
+STATE_BASE_SCORES: dict[str, float] = {
+    "WAITING": 5.0,
+    "RETRACEMENT": 25.0,
+    "DEPTH_BUILDING": 30.0,
+    "CHOCH_ZONE_ACTIVE": 35.0,
+    "CHOCH_TESTED": 40.0,
+    "CANDIDATE_ACTIVE": 45.0,
+    "CANDIDATE_CHOCH_TESTED": 48.0,
+    "ENTRY_ZONE": 50.0,
+    "CANDIDATE_CONFIRMED": 20.0,
+    "STRUCTURE_BROKEN": 5.0,
+}
+
+
+def _compute_hybrid_trend_score(
+    result: dict[str, Any],
+    settings: dict[str, Any],
+    setup_row: MonitoredSetup | None = None,
+) -> tuple[float, dict[str, Any]]:
+
+    # --- Layer 1: State baseline (0-50) ---
+    market_state = (
+        setup_row.market_state if setup_row is not None
+        else None
+    ) or "WAITING"
+    state_score = STATE_BASE_SCORES.get(market_state, 5.0)
+
+    # --- Layer 2: Opportunity score (0-35) ---
+    opportunity_score = 0.0
+    opp_detail = "no_candidate"
+
+    if market_state == "STRUCTURE_BROKEN":
+        opportunity_score = 0.0
+        opp_detail = "structure_broken"
+    elif setup_row is not None and setup_row.normalised_distance_to_bos is not None:
+        # normalised_distance_to_bos is already stored as
+        # abs((current - bos) / global_range) * 100
+        # We need ratio of journey covered:
+        # 0 = just started, 1 = at BOS
+        # Lower ratio = more room = higher score
+        ratio = min(1.0, max(0.0,
+            setup_row.normalised_distance_to_bos / 100.0
+        ))
+        if ratio <= 0.3:
+            opportunity_score = 35.0
+        elif ratio <= 0.7:
+            # Linear scale from 35 down to 10
+            opportunity_score = 35.0 - ((ratio - 0.3) / 0.4) * 25.0
+        else:
+            opportunity_score = 5.0
+        opp_detail = f"ratio_{round(ratio, 2)}"
+    elif market_state in ("RETRACEMENT", "DEPTH_BUILDING",
+                          "CHOCH_ZONE_ACTIVE", "CHOCH_TESTED"):
+        # Retracement phase — candidate not yet started
+        # Good opportunity still exists
+        opportunity_score = 15.0
+        opp_detail = "retracement_phase"
+
+    # --- Layer 3: Structure quality (0-15) ---
+    structure_score = 0.0
+
+    legs = [l for l in (result.get("legs") or [])
+            if l.get("confirmed")]
     impulses = [l for l in legs if l.get("type") == "impulse"]
-    retracements = [l for l in legs if l.get("type") == "retracement"]
+    retracements = [l for l in legs
+                    if l.get("type") == "retracement"]
 
-    if len(legs) < 3:
-        return 0.0, {
-            "price_component": 0.0,
-            "bar_component": 0.0,
-            "retracement_bonus": 0.0,
-            "price_ratio": 0.0,
-            "bar_ratio": 0.0,
-        }
+    # Price ratio component (0-7)
+    price_ratio = 0.0
+    if impulses and retracements:
+        impulse_price = sum(
+            abs(float(l.get("end_price", 0))
+                - float(l.get("start_price", 0)))
+            for l in impulses
+            if l.get("end_price") is not None
+        )
+        retr_price = sum(
+            abs(float(l.get("end_price", 0))
+                - float(l.get("start_price", 0)))
+            for l in retracements
+            if l.get("end_price") is not None
+        )
+        price_ratio = impulse_price / max(retr_price, 1e-9)
+        _LOG_DENOM = math.log2(11)
+        price_q = min(1.0, math.log2(price_ratio + 1) / _LOG_DENOM)
+        structure_score += price_q * 7.0
 
-    impulse_price = sum(
-        abs(float(l.get("end_price", 0)) - float(l.get("start_price", 0)))
-        for l in impulses
-        if l.get("end_price") is not None and l.get("start_price") is not None
-    )
-    retr_price = sum(
-        abs(float(l.get("end_price", 0)) - float(l.get("start_price", 0)))
-        for l in retracements
-        if l.get("end_price") is not None and l.get("start_price") is not None
-    )
-    price_ratio = impulse_price / max(retr_price, 1e-9)
-
+    # Velocity ratio component (0-4)
     def _mean_velocity(leg_list):
         velocities = []
         for l in leg_list:
@@ -520,37 +767,59 @@ def _compute_hybrid_trend_score(result: dict[str, Any], settings: dict[str, Any]
             if None in (sp, ep, si, ei):
                 continue
             bars = max(1, int(ei) - int(si))
-            velocities.append(abs(float(ep) - float(sp)) / bars)
-        return sum(velocities) / len(velocities) if velocities else 0.0
+            velocities.append(
+                abs(float(ep) - float(sp)) / bars
+            )
+        return sum(velocities) / len(velocities) \
+            if velocities else 0.0
 
-    impulse_velocity = _mean_velocity(impulses)
-    retr_velocity = _mean_velocity(retracements)
-    bar_ratio = impulse_velocity / max(retr_velocity, 1e-9)
+    impulse_vel = _mean_velocity(impulses)
+    retr_vel = _mean_velocity(retracements)
+    if retr_vel > 0:
+        bar_ratio = impulse_vel / max(retr_vel, 1e-9)
+        bar_q = min(1.0,
+            math.log2(bar_ratio + 1) / math.log2(11)
+        )
+        structure_score += bar_q * 4.0
 
-    _LOG_DENOM = math.log2(11)
-    price_component = min(100.0, max(0.0, (math.log2(price_ratio + 1) / _LOG_DENOM) * 100.0))
-    bar_component = min(100.0, max(0.0, (math.log2(bar_ratio + 1) / _LOG_DENOM) * 100.0))
+    # Leg count component (0-4)
+    leg_count = len([l for l in legs if l.get("confirmed")])
+    if leg_count >= 5:
+        structure_score += 4.0
+    elif leg_count == 4:
+        structure_score += 2.0
+    elif leg_count == 3:
+        structure_score += 1.0
 
-    weights = settings.get("score_weights") or {}
-    price_w = float(weights.get("price_ratio_weight", 0.7))
-    bar_w = float(weights.get("bar_ratio_weight", 0.3))
+    # --- Combine with profile weights ---
+    layer_weights = settings.get("scoring_layer_weights") or {
+        "state_weight": 0.50,
+        "opportunity_weight": 0.35,
+        "structure_weight": 0.15,
+    }
+    sw = float(layer_weights.get("state_weight", 0.50))
+    ow = float(layer_weights.get("opportunity_weight", 0.35))
+    qw = float(layer_weights.get("structure_weight", 0.15))
 
-    base_score = (price_component * price_w) + (bar_component * bar_w)
+    # Normalise each layer to 0-100 before weighting
+    state_norm = (state_score / 50.0) * 100.0
+    opp_norm = (opportunity_score / 35.0) * 100.0
+    struct_norm = (structure_score / 15.0) * 100.0
 
-    retracement_bonus = (
-        float(settings.get("retracement_bonus", 15.0))
-        if result.get("current_phase") == "retracement"
-        else 0.0
-    )
-
-    total = min(100.0, max(0.0, base_score + retracement_bonus))
+    total = min(100.0, max(0.0,
+        state_norm * sw +
+        opp_norm * ow +
+        struct_norm * qw
+    ))
 
     return total, {
-        "price_component": round(price_component, 2),
-        "bar_component": round(bar_component, 2),
-        "retracement_bonus": retracement_bonus,
+        "state_score": round(state_score, 2),
+        "opportunity_score": round(opportunity_score, 2),
+        "structure_score": round(structure_score, 2),
+        "market_state": market_state,
         "price_ratio": round(price_ratio, 4),
-        "bar_ratio": round(bar_ratio, 4),
+        "opp_detail": opp_detail,
+        "profile": settings.get("scoring_profile", "balanced"),
     }
 
 
@@ -626,6 +895,9 @@ def _serialize_setup(setup: MonitoredSetup) -> dict[str, Any]:
         "symbol": setup.symbol,
         "broker": _derive_broker(setup.symbol),
         "category": _infer_category(setup.symbol),
+        "display_name": get_display_name(setup.symbol),
+        "sector": get_sector(setup.symbol),
+        "universe": setup.universe or _infer_universe(setup.symbol),
         "universe_rank": None,
         "timeframe": setup.htf_timeframe,
         "trend": global_trend,
@@ -646,6 +918,7 @@ def _serialize_setup(setup: MonitoredSetup) -> dict[str, Any]:
         "score_components": score_components,
         "last_checked_at": setup.last_checked_at.isoformat() if setup.last_checked_at else None,
         "created_at": setup.created_at.isoformat() if setup.created_at else None,
+        "market_state": setup.market_state or "WAITING",
     }
 
 
@@ -658,6 +931,9 @@ def _serialize_placeholder_setup(symbol: str, timeframe: str = "1h") -> dict[str
         "symbol": symbol,
         "broker": _derive_broker(symbol),
         "category": inferred_category,
+        "display_name": get_display_name(symbol),
+        "sector": get_sector(symbol),
+        "universe": _infer_universe(symbol),
         "timeframe": timeframe,
         "trend": "range",
         "current_phase": "range",
@@ -717,6 +993,60 @@ def _infer_category(symbol: str) -> str:
     return _derive_deriv_category(symbol_upper, overrides={**(DEFAULT_SCAN_SETTINGS.get("deriv_category_overrides") or {})})
 
 
+SYNTHETIC_UNIVERSE_PREFIXES = (
+    "R_", "1HZ", "BOOM", "CRASH", "JD",
+    "OTC_", "STEP", "WLD", "RB", "RDBULL",
+    "STPRNG",
+)
+
+
+def _infer_universe(symbol: str) -> str:
+    """
+    Route a symbol to its universe.
+    multi_asset: forex, indices, commodity, equities
+    synthetic: Deriv synthetic indices
+    crypto: Binance crypto pairs
+    """
+    sym = symbol.strip().upper()
+    if sym.endswith("USDT") or sym.endswith("BTC") or sym.endswith("ETH"):
+        return "crypto"
+    for prefix in SYNTHETIC_UNIVERSE_PREFIXES:
+        if sym.startswith(prefix):
+            return "synthetic"
+    cat = _infer_category(sym)
+    if cat == "synthetic":
+        return "synthetic"
+    if cat == "crypto":
+        return "crypto"
+    return "multi_asset"
+
+
+def _get_universe_settings(
+    universe_name: str,
+    db: Session,
+) -> UniverseSettings | None:
+    return (
+        db.query(UniverseSettings)
+        .filter(UniverseSettings.universe_name == universe_name)
+        .first()
+    )
+
+
+def _get_universe_capacity(
+    universe_name: str,
+    db: Session,
+) -> int:
+    us = _get_universe_settings(universe_name, db)
+    if us is not None:
+        return us.capacity
+    defaults = {
+        "multi_asset": 150,
+        "synthetic": 50,
+        "crypto": 50,
+    }
+    return defaults.get(universe_name, 50)
+
+
 def _monitored_setup_category(symbol: str, settings: dict[str, Any]) -> str:
     """Lowercase category for eviction minimums; uses scan-settings overrides."""
     sym = symbol.upper()
@@ -772,8 +1102,8 @@ def _derive_category(symbol: str) -> str:
         return "SYNTHETIC"
     if cat == "crypto":
         return "CRYPTO"
-    if cat == "stocks":
-        return "STOCKS"
+    if cat in ("equities", "stocks"):
+        return "EQUITIES"
     if cat == "etfs":
         return "ETFS"
     return "FOREX"
@@ -890,6 +1220,7 @@ def _write_stage1_result(
         db.add(
             MonitoredSetup(
                 symbol=symbol,
+                universe=_infer_universe(symbol),
                 htf_timeframe=timeframe,
                 htf_trend_direction=result["trend"],
                 current_phase=result.get("current_phase"),
@@ -1276,17 +1607,28 @@ def _evict_to_capacity(
     db: Session,
     capacity: int = MONITORED_CAPACITY,
     settings: dict[str, Any] | None = None,
+    universe: str | None = None,
 ) -> None:
     if settings is None:
         settings = _get_effective_scan_settings(db)
     else:
         settings = _normalize_scan_settings(settings)
+    if universe is not None:
+        us = _get_universe_settings(universe, db)
+        if us is not None and us.category_min_slots_json:
+            merged = dict(
+                settings.get("category_min_slots")
+                or dict(DEFAULT_CATEGORY_MIN_SLOTS)
+            )
+            for k, v in (us.category_min_slots_json or {}).items():
+                try:
+                    merged[k] = int(v)
+                except (TypeError, ValueError):
+                    pass
+            settings = {**settings, "category_min_slots": merged}
     mins: dict[str, int] = settings.get("category_min_slots") or dict(DEFAULT_CATEGORY_MIN_SLOTS)
 
-    rows = list(
-        db.execute(
-            text(
-                """
+    sql_select = """
                 SELECT ms.id, ms.symbol, ms.trend_score,
                        CASE
                            WHEN EXISTS (
@@ -1300,11 +1642,24 @@ def _evict_to_capacity(
                            ELSE 0
                        END AS is_protected
                 FROM monitored_setups ms
-                ORDER BY ms.trend_score DESC, ms.id ASC
-                """
-            )
-        ).mappings().all()
-    )
+    """
+    if universe is not None:
+        sql_select += "                WHERE ms.universe = :univ\n"
+        rows = list(
+            db.execute(
+                text(sql_select + "                ORDER BY ms.trend_score DESC, ms.id ASC"),
+                {"univ": universe},
+            ).mappings().all()
+        )
+    else:
+        rows = list(
+            db.execute(
+                text(
+                    sql_select
+                    + "                ORDER BY ms.trend_score DESC, ms.id ASC"
+                )
+            ).mappings().all()
+        )
     if len(rows) <= capacity:
         return
 
@@ -1407,24 +1762,57 @@ def _evict_to_capacity(
     db.commit()
 
 
-def _run_scan_sync(request: ScanRequest, settings: dict[str, Any] | None = None) -> None:
+def _run_scan_sync(
+    request: ScanRequest,
+    settings: dict[str, Any] | None = None,
+    universe_filter: str | None = None,
+) -> None:
     db = SessionLocal()
     try:
         effective_settings = _normalize_scan_settings(settings or DEFAULT_SCAN_SETTINGS)
-        _evict_to_capacity(db, capacity=MONITORED_CAPACITY, settings=effective_settings)
+        if universe_filter is not None:
+            us_row = _get_universe_settings(universe_filter, db)
+            if us_row is not None and us_row.category_min_slots_json:
+                merged = dict(
+                    effective_settings.get("category_min_slots")
+                    or dict(DEFAULT_CATEGORY_MIN_SLOTS)
+                )
+                for k, v in (us_row.category_min_slots_json or {}).items():
+                    try:
+                        merged[k] = int(v)
+                    except (TypeError, ValueError):
+                        pass
+                effective_settings = {
+                    **effective_settings,
+                    "category_min_slots": merged,
+                }
         symbols = _normalize_symbol_list(request.symbols)
         deriv_active_symbols: set[str] | None = None
 
-        # Auto-discover universe if no symbols provided
+        # Refresh only monitored symbols — do NOT discover new ones
         if not symbols:
-            symbols, deriv_active_symbols = _build_scan_symbol_universe(effective_settings)
-
-            if not symbols:
-                raise RuntimeError(
-                    "Universe discovery failed — no symbols found from Binance, Deriv, or Yahoo Finance"
+            rows = db.query(MonitoredSetup.symbol, MonitoredSetup.universe).all()
+            sym_univ: dict[str, str | None] = {}
+            for sym, univ in rows:
+                s = str(sym)
+                if s not in sym_univ:
+                    sym_univ[s] = univ
+            if universe_filter is not None:
+                symbols = sorted(
+                    s
+                    for s, univ in sym_univ.items()
+                    if (univ or _infer_universe(s)) == universe_filter
                 )
+            else:
+                symbols = sorted(sym_univ.keys())
+            if not symbols:
+                logger.info("No monitored symbols to refresh")
+                return
 
-            logger.info("Full universe: %d symbols to scan", len(symbols))
+            logger.info("Refreshing %d monitored symbols", len(symbols))
+            # Skip initial eviction — already within capacity,
+            # only processing existing monitored setups.
+            # Final Stage 3 eviction is safety net.
 
         _scan_status["in_progress"] = True
         _scan_status["stage"] = "stage1"
@@ -1435,6 +1823,7 @@ def _run_scan_sync(request: ScanRequest, settings: dict[str, Any] | None = None)
         _scan_status["started_at"] = datetime.now(timezone.utc).isoformat()
         _scan_status["completed_at"] = None
         _scan_status["last_error"] = None
+        _scan_status["paper_engine"] = None
 
         stage1_results: dict[str, dict[str, Any]] = {}
         base_tf_config = _TF_WINDOWS.get("timeframes", {}).get(BASE_FETCH_TIMEFRAME, {})
@@ -1546,234 +1935,111 @@ def _run_scan_sync(request: ScanRequest, settings: dict[str, Any] | None = None)
             )
 
         _scan_status["stage"] = "stage2"
-        retracement_symbols = [
-            sym
-            for sym, data in stage1_results.items()
-            if data["result"].get("current_phase") == "retracement"
-        ]
-        _scan_status["stage2_total"] = len(retracement_symbols)
+        deep_refresh_hours = int(effective_settings.get("deep_analysis_refresh_hours", 24))
+        universe_capacity = (
+            _get_universe_capacity(universe_filter, db)
+            if universe_filter is not None
+            else MONITORED_CAPACITY
+        )
+        top50_rows_query = (
+            db.query(MonitoredSetup)
+            .order_by(MonitoredSetup.trend_score.desc(), MonitoredSetup.id.asc())
+        )
+        if universe_filter is not None:
+            ordered = top50_rows_query.all()
+            top50_rows = [
+                m
+                for m in ordered
+                if (m.universe or _infer_universe(m.symbol)) == universe_filter
+            ][:universe_capacity]
+        else:
+            top50_rows = top50_rows_query.limit(universe_capacity).all()
+        top50_symbols = [r.symbol for r in top50_rows]
+        _gsc_batch = {
+            row.symbol: row
+            for row in db.query(GlobalStructureCache).filter(
+                GlobalStructureCache.symbol.in_(top50_symbols)
+            ).all()
+        }
+        _scan_status["stage2_total"] = len(top50_symbols)
         logger.info(
-            "Stage 2: %d retracement markets to analyze deeply",
-            len(retracement_symbols),
+            "Stage 2: targeted deep refresh for %d top-50 monitored symbols",
+            len(top50_symbols),
         )
 
-        for symbol in retracement_symbols:
+        ACTIVE_REFRESH_TIMEFRAMES = ["15m", "30m", "1h", "4h", "1d"]
+        now = datetime.now(timezone.utc)
+
+        for symbol in top50_symbols:
+            sym_db = SessionLocal()
             try:
-                data = stage1_results[symbol]
-                candles = data["candles"]
-                result = data["result"]
+                # 1. Refresh candles for active timeframes only
+                for tf in ACTIVE_REFRESH_TIMEFRAMES:
+                    try:
+                        refresh_candles(symbol, tf, sym_db)
+                    except Exception as e:
+                        logger.warning("Stage 2 candle refresh %s %s: %s", symbol, tf, e)
 
-                apply_tf_deepening_to_legs(
-                    candles, result["legs"], FILTER_CONFIG, symbol
-                )
-                state_report = walk_structure(
-                    candles,
-                    result,
-                    FILTER_CONFIG,
-                    max_depth=3,
-                    symbol=symbol,
-                    deepening_timeframes=["4h", "1h", "30m"],
-                )
-                serialized = serialize_state_report(state_report)
-                upsert_stored_walker_result(
-                    db, symbol, request.timeframe, serialized
-                )
-                depth = serialized.get("max_depth_reached", 0)
-                mitigations = serialized.get("total_mitigation_count", 0)
-                trend_score, score_components = _compute_hybrid_trend_score(result, effective_settings)
-                serialized["score_components"] = score_components
+                # 2. Staleness check for deep analysis
+                gsc_row = _gsc_batch.get(symbol)
+                needs_deep = gsc_row is None or gsc_row.computed_at is None
+                if not needs_deep:
+                    computed_at_utc = gsc_row.computed_at
+                    if computed_at_utc.tzinfo is None:
+                        computed_at_utc = computed_at_utc.replace(tzinfo=timezone.utc)
+                    needs_deep = (now - computed_at_utc).total_seconds() > deep_refresh_hours * 3600
 
-                ema_signal = "WAITING"
-                ema_fast = compute_ema(candles, 9)
-                ema_slow = compute_ema(candles, 21)
+                if needs_deep:
+                    try:
+                        compute_global_structure_for_symbol(symbol, sym_db)
+                    except Exception as e:
+                        logger.warning("Stage 2 global structure %s: %s", symbol, e)
+                    try:
+                        compute_prime_impulse_structure(symbol, sym_db)
+                    except Exception as e:
+                        logger.warning("Stage 2 prime impulse %s: %s", symbol, e)
+                    try:
+                        compute_walker_for_symbol(symbol, sym_db)
+                    except Exception as e:
+                        logger.warning("Stage 2 walker %s: %s", symbol, e)
 
-                crossover: str | None = None
-                for idx in range(max(1, len(candles) - 2), len(candles)):
-                    prev_fast = ema_fast[idx - 1]
-                    prev_slow = ema_slow[idx - 1]
-                    curr_fast = ema_fast[idx]
-                    curr_slow = ema_slow[idx]
-                    if None in (prev_fast, prev_slow, curr_fast, curr_slow):
-                        continue
-                    if prev_fast <= prev_slow and curr_fast > curr_slow:
-                        crossover = "up"
-                    elif prev_fast >= prev_slow and curr_fast < curr_slow:
-                        crossover = "down"
+                # 3. Always recompute candidate impulse
+                try:
+                    compute_candidate_impulse_for_symbol(symbol, sym_db)
+                except Exception as e:
+                    logger.warning("Stage 2 candidate impulse %s: %s", symbol, e)
 
-                has_structural_depth = int(serialized.get("max_depth_reached", 0) or 0) >= 1
-                has_global_choch_zone = serialized.get("global_choch_zone") is not None
-                if has_structural_depth and has_global_choch_zone:
-                    if crossover == "up" and result.get("trend") == "up":
-                        ema_signal = "LONG"
-                    elif crossover == "down" and result.get("trend") == "down":
-                        ema_signal = "SHORT"
+                # 4. Always recompute market state
+                try:
+                    compute_and_write_market_state(symbol, sym_db)
+                except Exception as e:
+                    logger.warning("Stage 2 market state %s: %s", symbol, e)
 
-                existing = (
-                    db.query(MonitoredSetup)
-                    .filter(
-                        MonitoredSetup.symbol == symbol,
-                        MonitoredSetup.htf_timeframe == request.timeframe,
-                    )
-                    .one_or_none()
-                )
-                current_time = datetime.now(timezone.utc)
-                if existing is not None:
-                    existing.structural_state_json = serialized
-                    existing.trend_score = trend_score
-                    existing.ema_signal = ema_signal
-                    existing.current_phase = result.get("current_phase")
-                    existing.htf_trend_direction = result.get("trend")
-                    existing.updated_at = current_time
-                else:
-                    existing = MonitoredSetup(
-                        symbol=symbol,
-                        htf_timeframe=request.timeframe,
-                        htf_trend_direction=result["trend"],
-                        current_phase=result.get("current_phase"),
-                        status="MONITORING",
-                        ema_signal=ema_signal,
-                        trend_score=trend_score,
-                        structural_state_json=serialized,
-                        mtf_alignment=data.get("mtf_alignment") or {request.timeframe: result.get("trend", "unknown")},
-                        last_checked_at=current_time,
-                        created_at=current_time,
-                        updated_at=current_time,
-                    )
-                    db.add(existing)
-                db.commit()
-                _evict_to_capacity(db, capacity=MONITORED_CAPACITY, settings=effective_settings)
-                _record_signal_history(
-                    db=db,
-                    symbol=symbol,
-                    timeframe=request.timeframe,
-                    signal=ema_signal,
-                    trend_direction=result.get("trend"),
-                    trend_score=trend_score,
-                )
+                # 5. Update trend_score on MonitoredSetup using stored global structure
+                setup_row = _get_setup_by_symbol(sym_db, symbol)
+                gsc_updated = _gsc_batch.get(symbol)
+                if setup_row is not None and gsc_updated is not None:
+                    try:
+                        synthetic_result = {
+                            "legs": gsc_updated.legs_json or [],
+                            "current_phase": setup_row.current_phase,
+                        }
+                        new_score, score_components = _compute_hybrid_trend_score(
+                            synthetic_result, effective_settings, setup_row
+                        )
+                        setup_row.trend_score = new_score
+                        setup_row.last_checked_at = now
+                        setup_row.updated_at = now
+                        sym_db.commit()
+                    except Exception as e:
+                        logger.warning("Stage 2 score update %s: %s", symbol, e)
 
                 _scan_status["stage2_complete"] += 1
-                logger.info(
-                    "Stage 2 complete: %s depth=%s mitigations=%s score=%s components=%s",
-                    symbol,
-                    depth,
-                    mitigations,
-                    trend_score,
-                    score_components,
-                )
+                logger.info("Stage 2 complete: %s", symbol)
             except Exception as e:  # noqa: BLE001
                 logger.warning("Stage 2 failed for %s: %s", symbol, e)
-                continue
-
-        if binance_symbols:
-            _scan_status["stage"] = "stage2_catchup"
-            catchup_candidates = (
-                db.query(MonitoredSetup)
-                .filter(
-                    MonitoredSetup.status == "MONITORING",
-                    MonitoredSetup.trend_score == 0.0,
-                )
-                .all()
-            )
-            binance_catchup = [
-                setup
-                for setup in catchup_candidates
-                if (setup.symbol.upper().endswith("USDT") or setup.symbol.upper().endswith("BTC"))
-                and not setup.structural_state_json
-            ][:20]
-
-            logger.info(
-                "Stage 2 catch-up: %d Binance MONITORING markets with score=0 to process",
-                len(binance_catchup),
-            )
-
-            for setup in binance_catchup:
-                try:
-                    tf_cfg = _TF_WINDOWS.get("timeframes", {}).get(setup.htf_timeframe, {})
-                    cu_lookback: float = tf_cfg.get("lookback_days", 7.5)
-                    cu_start = datetime.now(timezone.utc) - timedelta(days=cu_lookback)
-                    cu_candles = fetch_binance_ohlc_sync(
-                        setup.symbol, setup.htf_timeframe, start_time=cu_start
-                    )
-                    if not cu_candles:
-                        continue
-
-                    cu_result = identify_trend(cu_candles, **FILTER_CONFIG)
-                    compute_internal_structure(cu_candles, cu_result["legs"], **FILTER_CONFIG)
-                    apply_tf_deepening_to_legs(
-                        cu_candles, cu_result["legs"], FILTER_CONFIG, setup.symbol
-                    )
-
-                    if cu_result.get("current_phase") != "retracement":
-                        setup.status = "SCANNING"
-                        setup.current_phase = cu_result.get("current_phase")
-                        setup.htf_trend_direction = cu_result["trend"]
-                        setup.updated_at = datetime.now(timezone.utc)
-                        db.commit()
-                        continue
-
-                    cu_state_report = walk_structure(
-                        cu_candles,
-                        cu_result,
-                        FILTER_CONFIG,
-                        max_depth=3,
-                        symbol=setup.symbol,
-                        deepening_timeframes=["4h", "1h", "30m"],
-                    )
-                    cu_serialized = serialize_state_report(cu_state_report)
-                    upsert_stored_walker_result(
-                        db,
-                        setup.symbol,
-                        (setup.htf_timeframe or "1h").strip().lower(),
-                        cu_serialized,
-                    )
-                    cu_depth = cu_serialized.get("max_depth_reached", 0)
-                    cu_mitigations = cu_serialized.get("total_mitigation_count", 0)
-                    cu_score, _cu_components = _compute_hybrid_trend_score(cu_result, effective_settings)
-                    cu_serialized["score_components"] = _cu_components
-
-                    cu_ema_signal = "WAITING"
-                    cu_ema_fast = compute_ema(cu_candles, 9)
-                    cu_ema_slow = compute_ema(cu_candles, 21)
-                    cu_crossover: str | None = None
-                    for idx in range(max(1, len(cu_candles) - 2), len(cu_candles)):
-                        pf = cu_ema_fast[idx - 1]
-                        ps = cu_ema_slow[idx - 1]
-                        cf = cu_ema_fast[idx]
-                        cs = cu_ema_slow[idx]
-                        if None in (pf, ps, cf, cs):
-                            continue
-                        if pf <= ps and cf > cs:
-                            cu_crossover = "up"
-                        elif pf >= ps and cf < cs:
-                            cu_crossover = "down"
-
-                    cu_has_depth = int(cu_serialized.get("max_depth_reached", 0) or 0) >= 1
-                    cu_has_choch = cu_serialized.get("global_choch_zone") is not None
-                    if cu_has_depth and cu_has_choch:
-                        if cu_crossover == "up" and cu_result.get("trend") == "up":
-                            cu_ema_signal = "LONG"
-                        elif cu_crossover == "down" and cu_result.get("trend") == "down":
-                            cu_ema_signal = "SHORT"
-
-                    setup.structural_state_json = cu_serialized
-                    setup.trend_score = cu_score
-                    setup.ema_signal = cu_ema_signal
-                    setup.htf_trend_direction = cu_result["trend"]
-                    setup.current_phase = cu_result.get("current_phase")
-                    setup.updated_at = datetime.now(timezone.utc)
-                    db.commit()
-                    _record_signal_history(
-                        db=db,
-                        symbol=setup.symbol,
-                        timeframe=setup.htf_timeframe,
-                        signal=cu_ema_signal,
-                        trend_direction=cu_result.get("trend"),
-                        trend_score=cu_score,
-                    )
-                    logger.info("Stage 2 catch-up: %s score=%.1f", setup.symbol, cu_score)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("Stage 2 catch-up failed for %s: %s", setup.symbol, e)
-                    continue
+            finally:
+                sym_db.close()
 
         try:
             _scan_status["stage"] = "stage3_correlation"
@@ -1820,8 +2086,38 @@ def _run_scan_sync(request: ScanRequest, settings: dict[str, Any] | None = None)
                     "Stage 3 correlation filter skipped: no Stage 1 candle set available for this scan"
                 )
 
+            # Paper trading engine
+            try:
+                from src.execution.paper_engine import run_paper_engine
+
+                paper_result = run_paper_engine(
+                    db, universe=universe_filter
+                )
+                _scan_status["paper_engine"] = paper_result
+                if paper_result.get("error"):
+                    logger.warning(
+                        "Paper engine commit failed: %s",
+                        paper_result["error"],
+                    )
+                else:
+                    logger.info(
+                        "Paper engine: checked=%d closed_tp=%d "
+                        "closed_sl=%d new_trades=%d",
+                        paper_result["monitor"]["checked"],
+                        paper_result["monitor"]["closed_tp"],
+                        paper_result["monitor"]["closed_sl"],
+                        paper_result["new_trades_opened"],
+                    )
+            except Exception as _pe:
+                logger.warning("Paper engine error: %s", _pe)
+
             _scan_status["stage"] = "stage3_eviction"
-            _evict_to_capacity(db, capacity=MONITORED_CAPACITY, settings=effective_settings)
+            _evict_to_capacity(
+                db,
+                capacity=universe_capacity,
+                settings=effective_settings,
+                universe=universe_filter,
+            )
             _scan_status["stage"] = "complete"
         except Exception as e:  # noqa: BLE001
             logger.warning("Stage 3 correlation/eviction failed: %s", e)
@@ -1995,6 +2291,56 @@ def save_scan_settings(payload: ScanSettingsPayload, db: Session = Depends(get_d
     return result
 
 
+@router.post("/refresh-yfinance-candles")
+def refresh_yfinance_candles(
+    db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """
+    Trigger full candle refresh for all yfinance symbols
+    including newly mapped forex/commodity symbols.
+    Runs in background thread.
+    """
+    from src.adapters.yfinance_data import YFINANCE_SYMBOL_MAP
+
+    _ = db
+    symbols = list(YFINANCE_SYMBOL_MAP.keys())
+    all_tfs = ["1d", "1w", "4h", "1h", "30m", "15m"]
+
+    def _refresh_all() -> None:
+        db2 = SessionLocal()
+        try:
+            def _refresh_sym(sym: str) -> None:
+                db3 = SessionLocal()
+                try:
+                    for tf in all_tfs:
+                        try:
+                            refresh_candles(sym, tf, db3, force_full=True)
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning(
+                                "yfinance refresh %s %s: %s",
+                                sym,
+                                tf,
+                                e,
+                            )
+                finally:
+                    db3.close()
+
+            with ThreadPoolExecutor(max_workers=5) as ex:
+                list(ex.map(_refresh_sym, symbols))
+            logger.info(
+                "yfinance candle refresh complete: %d symbols",
+                len(symbols),
+            )
+        finally:
+            db2.close()
+
+    threading.Thread(target=_refresh_all, daemon=True).start()
+    return {
+        "status": "refresh_started",
+        "symbols": len(symbols),
+    }
+
+
 @router.get("/scan-settings/history")
 def get_scan_settings_history(limit: int = 20, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
     rows = (
@@ -2012,6 +2358,35 @@ def get_scan_settings_history(limit: int = 20, db: Session = Depends(get_db)) ->
             "created_at": row.created_at.isoformat() if row.created_at else None,
         }
         for row in rows
+    ]
+
+
+@router.get("/{symbol}/state-history")
+def get_state_history(
+    symbol: str,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    from src.db.models import MarketStateHistory
+    rows = (
+        db.query(MarketStateHistory)
+        .filter(MarketStateHistory.symbol == symbol.strip().upper())
+        .order_by(MarketStateHistory.transitioned_at.desc())
+        .limit(max(1, min(limit, 200)))
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "symbol": r.symbol,
+            "state": r.state,
+            "previous_state": r.previous_state,
+            "transitioned_at": r.transitioned_at.isoformat(),
+            "score": r.score,
+            "trend_score": r.trend_score,
+            "notes": r.notes,
+        }
+        for r in rows
     ]
 
 
@@ -2077,6 +2452,7 @@ async def scan_setup(request: ScanRequest) -> dict[str, Any]:
     _scan_status["started_at"] = datetime.now(timezone.utc).isoformat()
     _scan_status["completed_at"] = None
     _scan_status["last_error"] = None
+    _scan_status["paper_engine"] = None
 
     request_copy = ScanRequest(**request.model_dump())
     worker = threading.Thread(target=_run_scan_sync, args=(request_copy, effective_settings), daemon=True)

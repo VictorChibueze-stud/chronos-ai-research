@@ -1,82 +1,133 @@
-# Ikenga Developer Guide (Skeleton)
+# Ikenga Developer Guide
+
+This guide covers the day-to-day developer workflow. For the canonical
+module map and data flow, see [`docs/architecture.md`](architecture.md).
+For agent-facing rules, see [`CLAUDE.md`](../CLAUDE.md) and
+[`.cursorrules`](../.cursorrules).
 
 ## 1. Setup
 
-- Create and activate a virtual environment.
-- Install dependencies:
+Create a virtual environment and install dependencies:
 
-  ```bash
-  pip install -r requirements.txt
+```bash
+python -m venv .venv
+.\.venv\Scripts\activate           # Windows
+pip install -r requirements.txt
 ```
 
-* Run tests:
+Copy `.env.example` to `.env` and set credentials for any broker you
+plan to exercise. Binance and CSV workflows do not require Deriv keys.
 
-  ```bash
-  pytest
-  ```
+```bash
+DERIV_APP_ID=...
+DERIV_API_TOKEN=...
+```
 
-## 2. Code Layout (High-Level)
+For Postgres workflows, set `DATABASE_URL`. The default is local SQLite.
 
-* `src/core/`: core math, features, signals, risk.
-* `src/adapters/`: broker and data-source adapters.
-* `src/backtest/`: backtest engine and metrics.
-* `src/llm/`: orchestration schemas and helpers for LLM integration.
-* `src/cli/`: optional command-line entry points.
-* `config/`: YAML configs for symbols and parameters.
-* `docs/`: system spec and developer docs.
-* `tests/`: pytest test files.
+## 2. Common Commands
 
-This document will be extended as functionality is implemented.
+```bash
+pytest                                # full test suite
+pytest tests/test_trend_id.py         # single file
+pytest tests/test_features.py::test_x # single test
+
+python scripts/run_api.py             # FastAPI on http://localhost:8000
+python scripts/run_ui.py              # Streamlit research UI
+python scripts/init_db.py             # initialize SQLite schema
+
+alembic upgrade head                  # apply migrations
+alembic revision --autogenerate -m "..."  # new migration
+
+cd frontend
+npm install
+npm run dev                           # Next.js dev server
+npm run build                         # production build (run before commit)
+npm run lint
+```
 
 ## 3. Visual Exploration
 
-Use the exploration harness to visually inspect computed features and structure detection:
-
-- Run the explorer:
+Use the exploration harness to inspect computed features and structure
+detection:
 
 ```bash
 python -m exploration.feature_explorer
 ```
 
-- Configure `SYMBOL`, `TIMEFRAME`, and `CSV_PATH` at the top of `exploration/feature_explorer.py`.
-- The script writes PNGs to `data/processed/plots/` (created automatically).
-- This is the preferred method to visually approve indicator and structure definitions.
+- Configure `SYMBOL`, `TIMEFRAME`, and `CSV_PATH` at the top of
+  `exploration/feature_explorer.py`.
+- PNGs are written to `data/processed/plots/` (created automatically).
+- Preferred path for visually approving indicator and structure
+  definitions before they reach `src/core/`.
 
-## 3. Data Adapters and Credentials
+For live Deriv exploration:
 
-### 3.1 Deriv Adapter
+```bash
+python -m exploration.eda_deriv_trend
+```
 
-- The Deriv OHLC adapter lives in `src/adapters/deriv_data.py`.
-- It uses `DerivConfig.from_env()` which expects the following environment variables:
-  - `DERIV_APP_ID`
-  - `DERIV_API_TOKEN`
-- For convenience, copy `.env.example` to `.env` and fill in your values locally, then configure your IDE or shell to load `.env` before running scripts.
+## 4. Data Adapters and Credentials
 
-### 3.2 Local CSV Loader
+### 4.1 Deriv Adapter
 
-- The CSV loader is implemented in `src/adapters/local_data.py`.
-- Use `load_ohlc_from_csv(path, ...)` to load data into `Candle` objects for backtesting or feature exploration.
-- The `exploration/feature_explorer.py` script can use this loader to visualize indicators and structure on historical data.
+- Implementation: `src/adapters/deriv_data.py`.
+- Configuration: `DerivConfig.from_env()` reads `DERIV_APP_ID` and
+  `DERIV_API_TOKEN`.
+- All Deriv candle reads go through the cache layer
+  (`src/cache/candle_store.py`); never call the WebSocket directly from
+  signal logic.
 
-## 4. Running a Simple Backtest
+### 4.2 Binance Adapter
 
-Once you have OHLC data (e.g., via `load_ohlc_from_csv` or `fetch_deriv_ohlc`) and a strategy function:
+- Implementation: `src/adapters/binance_data.py`.
+- No credentials required for public REST candles.
+- Same cache contract as Deriv.
 
-1. Convert raw data into `List[Candle>`.
-2. Implement a `StrategyFn` that takes a `StrategyContext` and returns a `Signal`.
-3. Call `run_backtest_single_symbol(candles, strategy_fn, BacktestConfig(...))`.
-4. Use `compute_equity_metrics(result.trades)` to get basic summary stats.
+### 4.3 Local CSV Loader
 
-In Phase 4, dedicated strategy modules will live in `src/core/signals.py`, and LLM/agent orchestration will call the same backtest engine for evaluation.
+- Implementation: `src/adapters/local_data.py`.
+- Use `load_ohlc_from_csv(path, ...)` to materialize `Candle` objects
+  for backtesting or feature exploration.
 
-## Market-Structure Research Harness
+## 5. Running a Backtest
 
-This project includes a deterministic research harness for Market-Structure experiments (Phase 1).
+With OHLC data (via `load_ohlc_from_csv`, `fetch_deriv_ohlc`, or
+`fetch_binance_ohlc`) and a strategy callable:
 
-- `config/timeframe_windows.yaml` defines canonical zoom-out windows per timeframe.
-- `src/core/timeframes.py` provides `load_timeframe_windows()` and `get_time_window()` to compute deterministic start/end windows for a given timeframe.
-- `src/core/experiment_registry.py` provides `create_experiment()` to create lightweight experiment folders under `experiments/`.
-- Notebooks in `notebook/` follow a deterministic pattern: restart kernel, run all cells, and use a single `params.yaml` (or experiment params) for reproducibility.
+1. Materialize a `List[Candle]`.
+2. Implement a `StrategyFn` that takes a `StrategyContext` and returns
+   a `Signal` (`src/core/signals.py`).
+3. Call `run_backtest_single_symbol(candles, strategy_fn, BacktestConfig(...))`
+   from `src/backtest/engine.py`.
+4. Compute summary metrics via `compute_equity_metrics(result.trades)`
+   from `src/backtest/metrics.py`.
 
-Use these helpers to make notebook-driven experiments repeatable and easy to register.
+The same strategy + risk code is intended for live use, so the backtest
+loop must not introduce its own market math.
 
+## 6. Market-Structure Research Harness
+
+- `config/timeframe_windows.yaml` — canonical zoom-out windows per
+  timeframe. Edit here, not in code.
+- `src/core/timeframes.py` — `load_timeframe_windows()` and
+  `get_time_window()` produce deterministic start/end windows.
+- `src/core/experiment_registry.py` — `create_experiment()` lays out
+  `experiments/<exp_id>/` with `params.yaml`, `data_manifest.json`,
+  `results.json`, and `figures/`.
+- Notebooks in `notebook/` are deterministic: restart kernel and run
+  all cells before treating output as canonical.
+
+## 7. Sandbox Workflow
+
+For algorithm changes you want to validate against live data without
+touching `src/`:
+
+1. Edit copies under `sandbox/algorithms/`.
+2. Iterate in `sandbox/research.ipynb` (imports from `sandbox/algorithms/`,
+   not `src/`).
+3. Compare with live via `sandbox/diff_tool.py`.
+4. Promote with `sandbox/push_to_live.py` (interactive confirmation).
+5. Restart the API server.
+
+See `sandbox/README.md` for details.

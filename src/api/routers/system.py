@@ -29,11 +29,21 @@ def _get_or_create_settings(db: Session) -> SystemSettings:
 @router.get("/health")
 def get_health(db: Session = Depends(get_db)) -> dict[str, int | str | bool | None]:
     from src.api.routers.setups import _scan_status
+    from src.db.models import UniverseSettings
+
+    universe_rows = (
+        db.query(UniverseSettings)
+        .filter(UniverseSettings.is_active == True)  # noqa: E712
+        .all()
+    )
+    total_capacity = sum(u.capacity for u in universe_rows)
+    if total_capacity == 0:
+        total_capacity = 50  # fallback when universe_settings is empty
 
     return {
         "status": "online",
         "active_setups": db.query(MonitoredSetup).count(),
-        "max_capacity": 50,
+        "max_capacity": total_capacity,
         "last_scan": scan_schedule_state["last_scan"],
         "next_scan": scan_schedule_state["next_scan"],
         "scan_in_progress": bool(_scan_status.get("in_progress", False)),

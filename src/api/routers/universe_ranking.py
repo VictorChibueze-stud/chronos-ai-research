@@ -15,8 +15,17 @@ router = APIRouter(prefix="/api/scanner", tags=["scanner"])
 
 
 @router.post("/rank-universe")
-def post_rank_universe() -> dict[str, Any]:
-    return trigger_ranking_async()
+def post_rank_universe(
+    universe: str | None = None,
+) -> dict[str, Any]:
+    return trigger_ranking_async(force=True, universe=universe)
+
+
+@router.post("/rank-universe/{universe_name}")
+def post_rank_universe_specific(
+    universe_name: str,
+) -> dict[str, Any]:
+    return trigger_ranking_async(force=True, universe=universe_name)
 
 
 @router.get("/ranking-status")

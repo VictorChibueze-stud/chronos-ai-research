@@ -1,13 +1,74 @@
 # Mapping of human-readable names to broker-specific symbol codes.
 # Phase 4: Multi-asset expansion with Forex, Commodities, and expanded Synthetics.
 
-# Yahoo Finance (equity indices) — IKENGA internal codes; enable broker "yfinance" in scan settings.
+# Yahoo Finance (equity indices, equities, forex exotics) — IKENGA internal codes;
+# enable broker "yfinance" in scan settings.
 yfinance:
+  # Indices
   - SPX500
   - NAS100
   - DAX40
   - FTSE100
   - NKY225
+  - US30
+  - UK100
+  - HK50
+  # Forex exotics
+  - FRXUSDZAR
+  - FRXEURTRY
+  # Equities
+  - AAPL
+  - MSFT
+  - GOOGL
+  - META
+  - NVDA
+  - TSLA
+  - AMZN
+  - HD
+  - JPM
+  - V
+  - MA
+  - BAC
+  - JNJ
+  - UNH
+  - PFE
+  - XOM
+  - CVX
+  - CAT
+  - NFLX
+  - SBUX
+
+# Documentation-only groupings; the runtime universe loader reads only `yfinance:`.
+yfinance_equities:
+  - AAPL
+  - MSFT
+  - GOOGL
+  - META
+  - NVDA
+  - TSLA
+  - AMZN
+  - HD
+  - JPM
+  - V
+  - MA
+  - BAC
+  - JNJ
+  - UNH
+  - PFE
+  - XOM
+  - CVX
+  - CAT
+  - NFLX
+  - SBUX
+
+yfinance_extended:
+  indices:
+    - US30
+    - UK100
+    - HK50
+  forex_exotics:
+    - FRXUSDZAR
+    - FRXEURTRY
 
 deriv:
   # Volatility Indices

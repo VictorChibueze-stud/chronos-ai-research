@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Ikenga** (codename: Chronos AI) is a research-grade, multi-timeframe trend-following system for Deriv synthetic indices and Binance crypto pairs. It encodes a discretionary trading strategy into deterministic Python with an optional LLM reasoning layer.
+**Ikenga** is a research-grade, multi-timeframe trend-following system for Deriv synthetic indices and Binance crypto pairs. It encodes a discretionary trading strategy into deterministic Python with an optional LLM reasoning layer.
+
+> The repository folder is `chronos-ai/` for legacy reasons. The product name is **Ikenga**.
 
 **This is not a production trading system.** No live orders are placed without `EXECUTION_ENABLED=1` explicitly set.
 

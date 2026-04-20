@@ -28,7 +28,7 @@ RMT_DEFAULT_FILTER_CONFIG = {
     "min_dominance_ratio": 1.2,
 }
 
-_DEFAULT_DEEPENING_TIMEFRAMES = ("4h", "1h", "30m")
+_DEFAULT_DEEPENING_TIMEFRAMES = ("4h", "1h", "30m", "15m", "5m")
 
 
 def _fetch_deepening_candles(symbol: str, tf: str, start_ts: Any, end_ts: Any) -> List[Any]:
@@ -308,7 +308,7 @@ def _walk_level(
                 tf_slice = _fetch_deepening_candles(
                     symbol, tf_key, impulse_start_ts, impulse_end_ts
                 )
-                if len(tf_slice) < 100:
+                if len(tf_slice) < 10:
                     continue
 
                 _legs_for_tf = [{
@@ -408,12 +408,7 @@ def _walk_level(
                 choch_zone = {
                     "lower_boundary": lower,
                     "upper_boundary": upper,
-                    "zone_width_pct": 0.0,
-                    "zone_midpoint": (lower + upper) / 2,
-                    "trend_direction": internal_result.get("trend", "up"),
-                    "source_impulse_start_index": 0,
-                    "source_impulse_end_index": 0,
-                    "prior_impulse_end_index": 0,
+                    "source": "internal_retracement_fallback",
                 }
         level["choch_zone"] = choch_zone
     else:

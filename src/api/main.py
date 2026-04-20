@@ -4,6 +4,7 @@ import asyncio
 import logging
 import threading
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from apscheduler.jobstores.base import JobLookupError
@@ -12,7 +13,7 @@ from fastapi import FastAPI
 from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routers import analysis, candles, execution, global_structure, integrations, overrides, setups, system, trend_visual
+from src.api.routers import analysis, candles, execution, global_structure, integrations, overrides, setups, symbol_params, system, trend_visual
 from src.api.routers import universe_ranking as universe_ranking_router
 from src.adapters.yfinance_data import YFINANCE_SYMBOL_MAP
 from src.api.routers.setups import (
@@ -27,7 +28,7 @@ from src.cache.candle_store import (
     refresh_all_symbols,
     refresh_candles,
 )
-from src.db.models import MonitoredSetup
+from src.db.models import MonitoredSetup, UniverseSettings
 from src.db.session import SessionLocal, get_db, init_db
 from src.scanner import alert_watcher
 from src.scanner.analysis_job_state import (
@@ -43,6 +44,8 @@ from src.scanner.global_structure import (
 from src.scanner.universe_ranking import get_ranking_status, trigger_ranking_async
 from src.fundamentals.scheduler import register_fundamentals_jobs
 from src.fundamentals.api.router import router as fundamentals_router
+from src.api.routers.manual_overrides import router as manual_structure_overrides_router
+from src.api.routers.universes import router as universes_router
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,142 @@ UNIVERSE_FREQ_TO_TRIGGER: dict[str, tuple[str, dict[str, Any]]] = {
     "monthly": ("cron", {"day": 1, "hour": 1, "minute": 0, "timezone": "UTC"}),
 }
 
+_UNIVERSE_JOB_KEYS = ("multi_asset", "synthetic", "crypto")
+
+_UNIVERSE_SCHED_FALLBACK: dict[str, dict[str, Any]] = {
+    "multi_asset": {
+        "rank_frequency": "weekly",
+        "refresh_offset_hours": 0,
+        "refresh_interval_hours": 4,
+    },
+    "synthetic": {
+        "rank_frequency": "daily",
+        "refresh_offset_hours": 1,
+        "refresh_interval_hours": 4,
+    },
+    "crypto": {
+        "rank_frequency": "daily",
+        "refresh_offset_hours": 2,
+        "refresh_interval_hours": 4,
+    },
+}
+
+
+def _utc_next_interval_start(offset_hours: int) -> datetime:
+    now = datetime.now(timezone.utc)
+    h = int(offset_hours) % 24
+    cand = now.replace(hour=h, minute=0, second=0, microsecond=0)
+    if cand <= now:
+        cand = cand + timedelta(days=1)
+    return cand
+
+
+def _us_sched_values(
+    universe_name: str,
+    us: UniverseSettings | None,
+) -> dict[str, Any]:
+    fb = _UNIVERSE_SCHED_FALLBACK[universe_name]
+    if us is None:
+        return {**fb, "is_active": True}
+    return {
+        "rank_frequency": us.rank_frequency or fb["rank_frequency"],
+        "refresh_offset_hours": int(
+            us.refresh_offset_hours
+            if us.refresh_offset_hours is not None
+            else fb["refresh_offset_hours"]
+        ),
+        "refresh_interval_hours": int(
+            us.refresh_interval_hours
+            if us.refresh_interval_hours is not None
+            else fb["refresh_interval_hours"]
+        ),
+        "is_active": bool(us.is_active),
+    }
+
+
+def _make_ranking_fn(univ: str):
+    def _fn() -> None:
+        if get_ranking_status().get("in_progress"):
+            logger.info(
+                "Scheduled universe ranking skipped (%s): already in progress",
+                univ,
+            )
+            return
+        out = trigger_ranking_async(force=False, universe=univ)
+        if not out.get("started"):
+            logger.info(
+                "Scheduled universe ranking skipped (%s): %s",
+                univ,
+                out.get("reason", "unknown"),
+            )
+        else:
+            logger.info("Scheduled universe ranking started (%s)", univ)
+
+    _fn.__name__ = f"_rank_{univ}"
+    return _fn
+
+
+def _make_refresh_fn(univ: str):
+    def _fn() -> None:
+        if _scan_status.get("in_progress"):
+            return
+        threading.Thread(
+            target=_run_scan_sync,
+            args=(ScanRequest(),),
+            kwargs={"universe_filter": univ},
+            daemon=True,
+        ).start()
+        sch = _app_scheduler
+        if sch is None:
+            return
+        job = sch.get_job(f"refresh_{univ}")
+        system.scan_schedule_state["next_scan"] = (
+            job.next_run_time.isoformat() if job and job.next_run_time else None
+        )
+
+    _fn.__name__ = f"_refresh_{univ}"
+    return _fn
+
+
+def _schedule_per_universe_jobs(sched: AsyncIOScheduler, db: Session) -> None:
+    rows = {r.universe_name: r for r in db.query(UniverseSettings).all()}
+    for universe_name in _UNIVERSE_JOB_KEYS:
+        rank_jid = f"rank_{universe_name}"
+        refresh_jid = f"refresh_{universe_name}"
+        for jid in (rank_jid, refresh_jid):
+            try:
+                sched.remove_job(jid)
+            except JobLookupError:
+                pass
+        us = rows.get(universe_name)
+        if us is not None and not us.is_active:
+            continue
+        vals = _us_sched_values(universe_name, us)
+        if not vals.get("is_active", True):
+            continue
+        freq = str(vals["rank_frequency"])
+        trigger, kw = UNIVERSE_FREQ_TO_TRIGGER.get(freq, UNIVERSE_FREQ_TO_TRIGGER["daily"])
+        sched.add_job(
+            _make_ranking_fn(universe_name),
+            trigger,
+            id=rank_jid,
+            misfire_grace_time=300,
+            **kw,
+        )
+        off = int(vals["refresh_offset_hours"])
+        hrs = int(vals["refresh_interval_hours"])
+        if hrs < 1:
+            hrs = 4
+        start_date = _utc_next_interval_start(off)
+        sched.add_job(
+            _make_refresh_fn(universe_name),
+            "interval",
+            hours=hrs,
+            start_date=start_date,
+            id=refresh_jid,
+            misfire_grace_time=60,
+        )
+
 _global_structure_job_lock = threading.Lock()
 _prime_impulse_job_lock = threading.Lock()
 _walker_all_job_lock = threading.Lock()
@@ -65,7 +204,7 @@ PRELOAD_TIMEFRAMES = ["5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo"]
 def _global_structure_all_job_entry(source: str) -> None:
     """Runs compute_global_structure_all; skip if another batch job holds the lock."""
     if not _global_structure_job_lock.acquire(blocking=False):
-        logger.info("global_structure_daily skipped (%s): already running", source)
+        logger.info("global_structure_all_job skipped (%s): already running", source)
         return
     set_global_structure_running(True)
     logger.info("global structure job starting (%s)", source)
@@ -237,33 +376,6 @@ def _warm_cache() -> None:
         db.close()
 
 
-def _run_scheduled_ranking() -> None:
-    if get_ranking_status().get("in_progress"):
-        logger.info("Scheduled universe ranking skipped: already in progress")
-        return
-    out = trigger_ranking_async()
-    if not out.get("started"):
-        logger.info(
-            "Scheduled universe ranking skipped: %s",
-            out.get("reason", "unknown"),
-        )
-    else:
-        logger.info("Scheduled universe ranking started")
-
-
-def _run_scheduled_scan() -> None:
-    if _scan_status.get("in_progress"):
-        return
-    threading.Thread(target=_run_scan_sync, args=(ScanRequest(),), daemon=True).start()
-    sch = _app_scheduler
-    if sch is None:
-        return
-    job = sch.get_job("active_refresh_every_4h")
-    system.scan_schedule_state["next_scan"] = (
-        job.next_run_time.isoformat() if job and job.next_run_time else None
-    )
-
-
 def _job_schedule_detail(sched: AsyncIOScheduler, job_id: str) -> dict[str, Any]:
     job = sched.get_job(job_id)
     if job is None:
@@ -272,9 +384,13 @@ def _job_schedule_detail(sched: AsyncIOScheduler, job_id: str) -> dict[str, Any]
     return {"job_id": job_id, "trigger": str(job.trigger), "next_run_time": nxt}
 
 
-def _reschedule_universe_ranking_job(sched: AsyncIOScheduler, freq: str) -> None:
+def _reschedule_universe_ranking_job(
+    sched: AsyncIOScheduler,
+    universe: str,
+    freq: str,
+) -> None:
     trigger, kw = UNIVERSE_FREQ_TO_TRIGGER.get(freq, UNIVERSE_FREQ_TO_TRIGGER["daily"])
-    jid = "universe_ranking_daily_utc"
+    jid = f"rank_{universe}"
     try:
         sched.reschedule_job(jid, trigger=trigger, misfire_grace_time=300, **kw)
     except Exception as e:
@@ -283,13 +399,31 @@ def _reschedule_universe_ranking_job(sched: AsyncIOScheduler, freq: str) -> None
             sched.remove_job(jid)
         except JobLookupError:
             pass
-        sched.add_job(_run_scheduled_ranking, trigger, id=jid, misfire_grace_time=300, **kw)
+        sched.add_job(
+            _make_ranking_fn(universe),
+            trigger,
+            id=jid,
+            misfire_grace_time=300,
+            **kw,
+        )
 
 
-def _reschedule_active_refresh_job(sched: AsyncIOScheduler, hours: int) -> None:
-    jid = "active_refresh_every_4h"
+def _reschedule_active_refresh_job(
+    sched: AsyncIOScheduler,
+    universe: str,
+    hours: int,
+    offset_hours: int,
+) -> None:
+    jid = f"refresh_{universe}"
+    start_date = _utc_next_interval_start(offset_hours)
     try:
-        sched.reschedule_job(jid, trigger="interval", hours=hours, misfire_grace_time=60)
+        sched.reschedule_job(
+            jid,
+            trigger="interval",
+            hours=hours,
+            start_date=start_date,
+            misfire_grace_time=60,
+        )
     except Exception as e:
         logger.warning("reschedule_job %s failed (%s), using remove+add", jid, e)
         try:
@@ -297,40 +431,31 @@ def _reschedule_active_refresh_job(sched: AsyncIOScheduler, hours: int) -> None:
         except JobLookupError:
             pass
         sched.add_job(
-            _run_scheduled_scan,
+            _make_refresh_fn(universe),
             "interval",
             hours=hours,
+            start_date=start_date,
             id=jid,
             misfire_grace_time=60,
         )
 
 
 def apply_scan_schedule_from_db(db: Session) -> dict[str, Any]:
-    """Reschedule universe ranking and active refresh from persisted scan settings."""
+    """Reschedule per-universe rank and refresh jobs from universe_settings rows."""
     sch = _app_scheduler
     if sch is None or not sch.running:
         return {
             "ok": False,
             "reason": "scheduler not running",
-            "universe_scan_frequency": None,
-            "active_refresh_hours": None,
             "jobs": [],
         }
-    from src.api.routers.setups import _get_effective_scan_settings
-
-    settings = _get_effective_scan_settings(db)
-    freq = str(settings.get("universe_scan_frequency", "daily"))
     try:
-        refresh_h = int(settings.get("active_refresh_hours", 4))
-    except (TypeError, ValueError):
-        refresh_h = 4
-    if refresh_h not in {1, 2, 4, 8, 12, 24}:
-        refresh_h = 4
-
-    try:
-        _reschedule_universe_ranking_job(sch, freq)
-        _reschedule_active_refresh_job(sch, refresh_h)
-        job = sch.get_job("active_refresh_every_4h")
+        _schedule_per_universe_jobs(sch, db)
+        jobs: list[dict[str, Any]] = []
+        for name in _UNIVERSE_JOB_KEYS:
+            jobs.append(_job_schedule_detail(sch, f"rank_{name}"))
+            jobs.append(_job_schedule_detail(sch, f"refresh_{name}"))
+        job = sch.get_job("refresh_multi_asset")
         system.scan_schedule_state["next_scan"] = (
             job.next_run_time.isoformat() if job and job.next_run_time else None
         )
@@ -339,22 +464,12 @@ def apply_scan_schedule_from_db(db: Session) -> dict[str, Any]:
         return {
             "ok": False,
             "reason": "reschedule failed",
-            "universe_scan_frequency": freq,
-            "active_refresh_hours": refresh_h,
-            "jobs": [
-                _job_schedule_detail(sch, "universe_ranking_daily_utc"),
-                _job_schedule_detail(sch, "active_refresh_every_4h"),
-            ],
+            "jobs": [],
         }
 
     return {
         "ok": True,
-        "universe_scan_frequency": freq,
-        "active_refresh_hours": refresh_h,
-        "jobs": [
-            _job_schedule_detail(sch, "universe_ranking_daily_utc"),
-            _job_schedule_detail(sch, "active_refresh_every_4h"),
-        ],
+        "jobs": jobs,
     }
 
 
@@ -370,22 +485,12 @@ async def lifespan(_: FastAPI):
     scheduler = AsyncIOScheduler()
     _app_scheduler = scheduler
 
-    scheduler.add_job(
-        _run_scheduled_ranking,
-        "cron",
-        hour=0,
-        minute=0,
-        timezone="UTC",
-        id="universe_ranking_daily_utc",
-        misfire_grace_time=300,
-    )
-    scheduler.add_job(
-        _run_scheduled_scan,
-        "interval",
-        hours=4,
-        id="active_refresh_every_4h",
-        misfire_grace_time=60,
-    )
+    db_sched = SessionLocal()
+    try:
+        _schedule_per_universe_jobs(scheduler, db_sched)
+    finally:
+        db_sched.close()
+
     scheduler.add_job(
         lambda: threading.Thread(target=refresh_universe_cache, daemon=True).start(),
         "interval",
@@ -400,37 +505,10 @@ async def lifespan(_: FastAPI):
         id="candle_cache_refresh_15m",
         misfire_grace_time=60,
     )
-    scheduler.add_job(
-        lambda: _spawn_global_structure_all_job("cron"),
-        "cron",
-        hour=1,
-        minute=0,
-        timezone="UTC",
-        id="global_structure_daily",
-        misfire_grace_time=300,
-    )
-    scheduler.add_job(
-        lambda: _spawn_prime_impulse_all_job("cron"),
-        "cron",
-        hour=1,
-        minute=30,
-        timezone="UTC",
-        id="prime_impulse_daily",
-        misfire_grace_time=300,
-    )
-    scheduler.add_job(
-        lambda: _spawn_walker_all_job("cron"),
-        "cron",
-        hour=2,
-        minute=0,
-        timezone="UTC",
-        id="walker_daily",
-        misfire_grace_time=300,
-    )
     register_fundamentals_jobs(scheduler)
     scheduler.start()
     asyncio.create_task(alert_watcher.run_alert_watcher())
-    job = scheduler.get_job("active_refresh_every_4h")
+    job = scheduler.get_job("refresh_multi_asset")
     system.scan_schedule_state["next_scan"] = (
         job.next_run_time.isoformat() if job and job.next_run_time else None
     )
@@ -477,12 +555,15 @@ app.include_router(setups.router)
 app.include_router(analysis.router)
 app.include_router(analysis.universe_router)
 app.include_router(overrides.router)
+app.include_router(manual_structure_overrides_router)
 app.include_router(candles.router)
 app.include_router(trend_visual.router)
 app.include_router(integrations.router)
 app.include_router(execution.router)
 app.include_router(global_structure.router)
 app.include_router(universe_ranking_router.router)
+app.include_router(universes_router)
+app.include_router(symbol_params.router)
 app.include_router(fundamentals_router)
 
 

@@ -3,9 +3,55 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 
 import { UniverseDashboard } from "@/components/universe-dashboard";
-import { FullBleedPageSkeleton } from "@/components/ui/page-skeleton";
 import { api } from "@/lib/api";
 import type { ScanJobLog, Setup, UniverseStats } from "@/lib/types";
+
+function UniversePageSkeleton() {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        padding: "20px",
+        fontFamily: "'IBM Plex Mono', monospace",
+      }}
+    >
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: 8,
+        }}
+      >
+        {[1, 2, 3, 4].map((i) => (
+          <div
+            key={i}
+            style={{
+              height: 72,
+              background: "#111318",
+              borderRadius: 2,
+              animation: "card-pulse 1.5s ease-in-out infinite",
+            }}
+          />
+        ))}
+      </div>
+      {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+        <div
+          key={i}
+          style={{
+            height: 44,
+            background: "#111318",
+            borderRadius: 2,
+            animation: "card-pulse 1.5s ease-in-out infinite",
+            animationDelay: `${i * 0.08}s`,
+          }}
+        />
+      ))}
+      <style>{`@keyframes card-pulse{0%,100%{opacity:0.3}50%{opacity:0.6}}`}</style>
+    </div>
+  );
+}
 
 const CENTERED_STATUS_STYLE: CSSProperties = {
   display: "flex",
@@ -102,8 +148,8 @@ export default function UniversePage() {
 
   if (loading) {
     return (
-      <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
-        <FullBleedPageSkeleton label="Loading universe" />
+      <div className="flex h-full min-h-0 flex-1 flex-col overflow-auto bg-[#131722]">
+        <UniversePageSkeleton />
       </div>
     );
   }

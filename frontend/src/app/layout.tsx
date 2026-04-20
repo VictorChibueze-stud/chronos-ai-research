@@ -57,6 +57,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   const titleMap: Record<string, string> = {
     "/scanner": "Scanner",
     "/signals": "Signal Board",
+    "/trades": "Trade History",
     "/market": "Market View",
     "/universe": "Universe",
     "/settings/integrations": "Integrations & execution",
