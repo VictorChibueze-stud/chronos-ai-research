@@ -33,12 +33,20 @@ import { DEFAULT_ANALYSIS_DEV_PARAMS } from "@/lib/types";
 
 const TIMEFRAMES = ["5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo"] as const;
 
+/** 1W and 1MO payloads are small (≤200 bars by construction) so we fetch everything up front. */
+const FULL_LOAD_TIMEFRAMES = new Set<string>(["1w", "1mo"]);
+/** TIER 1 render target — latest N candles paints the chart instantly. */
+const INITIAL_CANDLE_LIMIT = 200;
+/** Timeframes we eagerly warm in the background once the active TF has rendered. */
+const PREFETCH_TIMEFRAMES = ["4h", "1h", "1d", "1w", "1mo"] as const;
+const PREFETCH_STAGGER_MS = 800;
+
 const CENTERED_STATUS_STYLE: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   height: "100%",
-  background: "#0D0F14",
+  background: "var(--bg-base)",
   color: "#F5A623",
   fontFamily: '"IBM Plex Mono", monospace',
   fontSize: 11,
@@ -76,6 +84,10 @@ function MarketContent() {
   const [activeTimeframe, setActiveTimeframe] = useState<string>(initialTimeframe);
   const [loading, setLoading] = useState(true);
   const [candlesLoading, setCandlesLoading] = useState(false);
+  /** True once TIER 1 (limited) candles have hit the chart — used to gate background prefetch. */
+  const [candlesInitialLoaded, setCandlesInitialLoaded] = useState(false);
+  /** Per-TF candle cache warmed in the background so tab switches are instant. */
+  const [prefetchedTimeframes, setPrefetchedTimeframes] = useState<Record<string, CandleBar[]>>({});
   const [isSwitchingTimeframe, setIsSwitchingTimeframe] = useState(false);
   const [tfError, setTfError] = useState<string | null>(null);
   /** Set only when GET /api/setups/:symbol fails (network / 5xx). Candle failures use chartLoadError. */
@@ -227,9 +239,36 @@ function MarketContent() {
       setIsSwitchingTimeframe(true);
       setAnalysisLoading(true);
       setAnalysisData(null);
+
+      // TIER 0 — serve prefetched candles instantly if we have them.
+      // This is the common case once the background prefetch has warmed
+      // the other timeframes, so the tab switch feels seamless.
+      const prefetched = prefetchedTimeframes[tf];
+      if (prefetched && prefetched.length > 0) {
+        setCandles(prefetched);
+        setChartLoadError(null);
+        setIsSwitchingTimeframe(false);
+        setCandlesLoading(false);
+        // Background upgrade to full history when the prefetch was capped.
+        if (!FULL_LOAD_TIMEFRAMES.has(tf)) {
+          api
+            .getCandlesLimited(symbolParam, tf, 0)
+            .then((full) => {
+              if (activeTimeframeRef.current !== tf) return;
+              const arr = Array.isArray(full) ? full : [];
+              if (arr.length > prefetched.length) {
+                setCandles(arr);
+              }
+            })
+            .catch(() => {});
+        }
+        return;
+      }
+
+      // Fallback — no prefetch hit. Do a normal full load.
       setCandlesLoading(true);
       try {
-        const newCandles = await api.getCandles(symbolParam, tf);
+        const newCandles = await api.getCandlesLimited(symbolParam, tf, 0);
         if (activeTimeframeRef.current !== tf) {
           return;
         }
@@ -252,7 +291,7 @@ function MarketContent() {
         setCandlesLoading(false);
       }
     },
-    [symbolParam, activeTimeframe],
+    [symbolParam, activeTimeframe, prefetchedTimeframes],
   );
 
   useEffect(() => {
@@ -306,6 +345,8 @@ function MarketContent() {
       setAnalysisData(null);
       setSignalHistory([]);
       setCandlesLoading(false);
+      setCandlesInitialLoaded(false);
+      setPrefetchedTimeframes({});
       setAnalysisLoading(false);
       setIsSwitchingTimeframe(false);
       setTfError(null);
@@ -318,29 +359,54 @@ function MarketContent() {
       : "1h";
     setActiveTimeframe(tf);
 
+    // New symbol (or URL-driven TF change) — drop any prefetched bars
+    // from the previous market so we never cross-contaminate the chart.
+    setPrefetchedTimeframes({});
+    setCandlesInitialLoaded(false);
+
     let cancelled = false;
     setCandlesLoading(true);
     setAnalysisLoading(true);
     setAnalysisData(null);
+
+    const isFullLoad = FULL_LOAD_TIMEFRAMES.has(tf);
+    const limit = isFullLoad ? 0 : INITIAL_CANDLE_LIMIT;
+
     void (async () => {
       try {
-        const candlesData = await api.getCandles(symbolParam, tf);
+        // TIER 1 — paint the chart immediately with the most recent N bars.
+        const candlesData = await api.getCandlesLimited(symbolParam, tf, limit);
         if (cancelled) {
           return;
         }
-        setCandles(Array.isArray(candlesData) ? candlesData : []);
+        const list = Array.isArray(candlesData) ? candlesData : [];
+        setCandles(list);
         setChartLoadError(null);
+        setCandlesLoading(false);
+        setCandlesInitialLoaded(true);
+
+        // TIER 2 — silently append the full history so deep zooms / overlays
+        // have everything they need once the user settles in.
+        if (!isFullLoad && limit > 0) {
+          api
+            .getCandlesLimited(symbolParam, tf, 0)
+            .then((full) => {
+              if (cancelled) return;
+              const arr = Array.isArray(full) ? full : [];
+              if (arr.length > list.length) {
+                setCandles(arr);
+              }
+            })
+            .catch(() => {});
+        }
       } catch {
         if (!cancelled) {
           setCandles([]);
           setAnalysisData(null);
           setSignalHistory([]);
           setChartLoadError("Unable to load candles for this market");
-        }
-        return;
-      } finally {
-        if (!cancelled) {
           setCandlesLoading(false);
+          setCandlesInitialLoaded(false);
         }
       }
     })();
@@ -349,6 +415,41 @@ function MarketContent() {
       cancelled = true;
     };
   }, [symbolParam, timeframeParam]);
+
+  // Background prefetch — warm other timeframes so tab switches are instant.
+  // Staggered so we never hammer the backend even for slow symbols.
+  useEffect(() => {
+    if (!symbolParam || !candlesInitialLoaded) {
+      return;
+    }
+    let cancelled = false;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const currentActive = activeTimeframeRef.current;
+    const toFetch = PREFETCH_TIMEFRAMES.filter((tf) => tf !== currentActive);
+
+    toFetch.forEach((tf, i) => {
+      const t = setTimeout(() => {
+        if (cancelled) return;
+        const isFullLoad = FULL_LOAD_TIMEFRAMES.has(tf);
+        const prefetchLimit = isFullLoad ? 0 : INITIAL_CANDLE_LIMIT;
+        api
+          .getCandlesLimited(symbolParam, tf, prefetchLimit)
+          .then((data) => {
+            if (cancelled) return;
+            if (Array.isArray(data) && data.length > 0) {
+              setPrefetchedTimeframes((prev) => ({ ...prev, [tf]: data }));
+            }
+          })
+          .catch(() => {});
+      }, (i + 1) * PREFETCH_STAGGER_MS);
+      timers.push(t);
+    });
+
+    return () => {
+      cancelled = true;
+      for (const t of timers) clearTimeout(t);
+    };
+  }, [symbolParam, candlesInitialLoaded]);
 
   useEffect(() => {
     if (!symbolParam) {
@@ -438,7 +539,7 @@ function MarketContent() {
     const t = String(trend ?? "").toLowerCase();
     if (t === "up") return { glyph: "▲", color: "#26A69A" };
     if (t === "down") return { glyph: "▼", color: "#EF5350" };
-    return { glyph: "—", color: "#787B86" };
+    return { glyph: "—", color: "var(--text-dim)" };
   }
 
   // Pool used by the landing-state quick search. Prefer the
@@ -526,7 +627,7 @@ function MarketContent() {
         style={{
           flex: 1,
           minHeight: 0,
-          background: "#0B0D11",
+          background: "var(--bg-base)",
           display: "flex",
           flexDirection: "column",
           alignItems: "stretch",
@@ -550,7 +651,6 @@ function MarketContent() {
         >
           <div
             style={{
-              position: "relative",
               width: "100%",
               maxWidth: 400,
             }}
@@ -564,16 +664,15 @@ function MarketContent() {
               onBlur={() =>
                 setTimeout(() => setLandingSearchFocused(false), 150)
               }
-              autoFocus
               style={{
                 width: "100%",
-                background: "#111318",
-                border: "1px solid #2A2E39",
+                background: "var(--bg-surface)",
+                border: landingSearchFocused ? "1px solid var(--amber)" : "1px solid var(--border-default)",
                 borderRadius: 2,
                 padding: "10px 14px",
                 fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 11,
-                color: "#D1D4DC",
+                color: "var(--text-primary)",
                 outline: "none",
                 boxSizing: "border-box",
                 letterSpacing: "0.06em",
@@ -584,7 +683,7 @@ function MarketContent() {
                 style={{
                   marginTop: 4,
                   fontSize: 8,
-                  color: "#4A4D58",
+                  color: "var(--text-muted)",
                   fontFamily: "'IBM Plex Mono', monospace",
                   letterSpacing: "0.08em",
                 }}
@@ -593,174 +692,6 @@ function MarketContent() {
               </div>
             ) : null}
 
-            {showLandingDropdown ? (
-              <div
-                style={{
-                  position: "absolute",
-                  top: "100%",
-                  left: 0,
-                  right: 0,
-                  marginTop: 4,
-                  maxHeight: 420,
-                  overflowY: "auto",
-                  background: "#111318",
-                  border: "1px solid #2A2E39",
-                  borderRadius: 2,
-                  zIndex: 100,
-                  boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
-                }}
-              >
-                {displayMarkets.length === 0 ? (
-                  <div
-                    style={{
-                      padding: "20px 14px",
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 10,
-                      color: "#4A4D58",
-                      textAlign: "center",
-                      letterSpacing: "0.08em",
-                    }}
-                  >
-                    NO MARKETS FOUND
-                  </div>
-                ) : (
-                  groupedDisplayMarkets.map((group) => {
-                    const isCollapsed = collapsedCategories.has(group.category);
-                    return (
-                    <div key={group.category}>
-                      <button
-                        type="button"
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          toggleCategory(group.category);
-                        }}
-                        style={{
-                          position: "sticky",
-                          top: 0,
-                          width: "100%",
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          padding: "6px 14px 4px 14px",
-                          background: "#0D0F14",
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 8,
-                          letterSpacing: "0.12em",
-                          color: "#F5A623",
-                          textTransform: "uppercase",
-                          borderBottom: "1px solid #1E222D",
-                          border: "none",
-                          cursor: "pointer",
-                          textAlign: "left",
-                        }}
-                      >
-                        <span>{group.category}</span>
-                        <span style={{ fontSize: 8 }}>
-                          {isCollapsed
-                            ? `▶ ${group.items.length}`
-                            : `▼ ${group.items.length}`}
-                        </span>
-                      </button>
-                      {!isCollapsed && group.items.map((s) => {
-                        const { glyph, color } = emptyStateTrendArrow(s.trend);
-                        return (
-                          <button
-                            key={s.symbol}
-                            type="button"
-                            onMouseDown={() => {
-                              router.push(
-                                `/market?symbol=${encodeURIComponent(s.symbol)}&timeframe=1d`,
-                              );
-                            }}
-                            style={{
-                              width: "100%",
-                              display: "flex",
-                              justifyContent: "space-between",
-                              alignItems: "center",
-                              padding: "8px 14px",
-                              background: "transparent",
-                              border: "none",
-                              borderBottom: "1px solid #1A1D24",
-                              cursor: "pointer",
-                              gap: 8,
-                              textAlign: "left",
-                            }}
-                            onMouseEnter={(e) => {
-                              (e.currentTarget as HTMLButtonElement).style.background =
-                                "#1A1D24";
-                            }}
-                            onMouseLeave={(e) => {
-                              (e.currentTarget as HTMLButtonElement).style.background =
-                                "transparent";
-                            }}
-                          >
-                            <div
-                              style={{
-                                display: "flex",
-                                flexDirection: "column",
-                                gap: 2,
-                                minWidth: 0,
-                              }}
-                            >
-                              <span
-                                style={{
-                                  fontFamily: "'IBM Plex Mono', monospace",
-                                  fontSize: 11,
-                                  fontWeight: 700,
-                                  color: "#D1D4DC",
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                {s.symbol}
-                              </span>
-                              {s.display_name && s.display_name !== s.symbol ? (
-                                <span
-                                  style={{
-                                    fontFamily: "'IBM Plex Mono', monospace",
-                                    fontSize: 8,
-                                    color: "#4A4D58",
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                    whiteSpace: "nowrap",
-                                  }}
-                                >
-                                  {s.display_name}
-                                </span>
-                              ) : null}
-                            </div>
-                            <div
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 8,
-                                flexShrink: 0,
-                              }}
-                            >
-                              <span style={{ fontSize: 10, color }}>{glyph}</span>
-                              <span
-                                style={{
-                                  fontFamily: "'IBM Plex Mono', monospace",
-                                  fontSize: 10,
-                                  fontWeight: 700,
-                                  color: "#F5A623",
-                                }}
-                              >
-                                {typeof s.trend_score === "number"
-                                  ? s.trend_score.toFixed(1)
-                                  : "—"}
-                              </span>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                    );
-                  })
-                )}
-              </div>
-            ) : null}
           </div>
 
           <div style={{ height: 20 }} />
@@ -791,10 +722,10 @@ function MarketContent() {
                     fontSize: 9,
                     letterSpacing: "0.08em",
                     fontFamily: "'IBM Plex Mono', monospace",
-                    border: active ? "1px solid #F5A623" : "1px solid #1C1E24",
+                    border: active ? "1px solid #F5A623" : "1px solid var(--border-subtle)",
                     borderRadius: 2,
                     background: active ? "#F5A623" : "transparent",
-                    color: active ? "#0D0F14" : "#787B86",
+                    color: active ? "var(--bg-base)" : "var(--text-dim)",
                     cursor: "pointer",
                     textTransform: "uppercase",
                   }}
@@ -805,9 +736,166 @@ function MarketContent() {
             })}
           </div>
 
+          {showLandingDropdown ? (
+            <div
+              style={{
+                width: "100%",
+                maxWidth: 400,
+                maxHeight: 420,
+                overflowY: "auto",
+                background: "var(--bg-surface)",
+                border: "1px solid var(--border-default)",
+                borderRadius: 2,
+                marginBottom: 14,
+              }}
+            >
+              {displayMarkets.length === 0 ? (
+                <div
+                  style={{
+                    padding: "20px 14px",
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    color: "var(--text-muted)",
+                    textAlign: "center",
+                    letterSpacing: "0.08em",
+                  }}
+                >
+                  NO MARKETS FOUND
+                </div>
+              ) : (
+                groupedDisplayMarkets.map((group) => {
+                  const isCollapsed = collapsedCategories.has(group.category);
+                  return (
+                    <div key={group.category}>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          toggleCategory(group.category);
+                        }}
+                        style={{
+                          position: "sticky",
+                          top: 0,
+                          width: "100%",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          padding: "6px 14px 4px 14px",
+                          background: "var(--bg-base)",
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 8,
+                          letterSpacing: "0.12em",
+                          color: "#F5A623",
+                          textTransform: "uppercase",
+                          borderBottom: "1px solid var(--border-subtle)",
+                          border: "none",
+                          cursor: "pointer",
+                          textAlign: "left",
+                        }}
+                      >
+                        <span>{group.category}</span>
+                        <span style={{ fontSize: 8 }}>
+                          {isCollapsed ? `▶ ${group.items.length}` : `▼ ${group.items.length}`}
+                        </span>
+                      </button>
+                      {!isCollapsed && group.items.map((s) => {
+                        const { glyph, color } = emptyStateTrendArrow(s.trend);
+                        return (
+                          <button
+                            key={s.symbol}
+                            type="button"
+                            onMouseDown={() => {
+                              router.push(`/market?symbol=${encodeURIComponent(s.symbol)}&timeframe=1d`);
+                            }}
+                            style={{
+                              width: "100%",
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              padding: "8px 14px",
+                              background: "transparent",
+                              border: "none",
+                              borderBottom: "1px solid var(--border-subtle)",
+                              cursor: "pointer",
+                              gap: 8,
+                              textAlign: "left",
+                            }}
+                            onMouseEnter={(e) => {
+                              (e.currentTarget as HTMLButtonElement).style.background = "var(--bg-hover)";
+                            }}
+                            onMouseLeave={(e) => {
+                              (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: 2,
+                                minWidth: 0,
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontFamily: "'IBM Plex Mono', monospace",
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  color: "var(--text-primary)",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {s.symbol}
+                              </span>
+                              {s.display_name && s.display_name !== s.symbol ? (
+                                <span
+                                  style={{
+                                    fontFamily: "'IBM Plex Mono', monospace",
+                                    fontSize: 8,
+                                    color: "var(--text-muted)",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {s.display_name}
+                                </span>
+                              ) : null}
+                            </div>
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 8,
+                                flexShrink: 0,
+                              }}
+                            >
+                              <span style={{ fontSize: 10, color }}>{glyph}</span>
+                              <span
+                                style={{
+                                  fontFamily: "'IBM Plex Mono', monospace",
+                                  fontSize: 10,
+                                  fontWeight: 700,
+                                  color: "#F5A623",
+                                }}
+                              >
+                                {typeof s.trend_score === "number" ? s.trend_score.toFixed(1) : "—"}
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          ) : null}
+
           <div
             style={{
-              display: "grid",
+              display: showLandingDropdown ? "none" : "grid",
               gridTemplateColumns: "repeat(3, minmax(100px, 112px))",
               gridTemplateRows: "repeat(2, auto)",
               gap: 10,
@@ -823,7 +911,7 @@ function MarketContent() {
                     style={{
                       minHeight: 72,
                       border: "1px solid #F5A623",
-                      background: "#131722",
+                      background: "var(--bg-surface)",
                       borderRadius: 2,
                       animation: `card-pulse 1.4s ease-in-out ${i * 0.1}s infinite`,
                     }}
@@ -848,7 +936,7 @@ function MarketContent() {
                         style={{
                           minHeight: 72,
                           border: "1px solid #F5A623",
-                          background: "#131722",
+                          background: "var(--bg-surface)",
                           borderRadius: 2,
                           cursor: "pointer",
                           display: "flex",
@@ -858,10 +946,10 @@ function MarketContent() {
                           transition: "background 0.12s ease",
                         }}
                         onMouseEnter={(e) => {
-                          e.currentTarget.style.background = "#1E222D";
+                          e.currentTarget.style.background = "var(--bg-elevated)";
                         }}
                         onMouseLeave={(e) => {
-                          e.currentTarget.style.background = "#131722";
+                          e.currentTarget.style.background = "var(--bg-surface)";
                         }}
                       >
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
@@ -869,7 +957,7 @@ function MarketContent() {
                             style={{
                               fontSize: 11,
                               fontWeight: 600,
-                              color: "#D1D4DC",
+                              color: "var(--text-primary)",
                               letterSpacing: "0.03em",
                               overflow: "hidden",
                               textOverflow: "ellipsis",
@@ -880,7 +968,7 @@ function MarketContent() {
                           </span>
                           <span style={{ fontSize: 11, color, flexShrink: 0 }}>{glyph}</span>
                         </div>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: "#D1D4DC", alignSelf: "flex-end" }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-primary)", alignSelf: "flex-end" }}>
                           {formatScore(s.trend_score)}
                         </span>
                       </div>
@@ -900,7 +988,7 @@ function MarketContent() {
             >
               IKENGA
             </div>
-            <div style={{ fontSize: 9, letterSpacing: "0.12em", color: "#787B86", textAlign: "center" }}>
+            <div style={{ fontSize: 9, letterSpacing: "0.12em", color: "var(--text-dim)", textAlign: "center" }}>
               SELECT A MARKET TO BEGIN ANALYSIS
             </div>
           </div>
@@ -917,15 +1005,15 @@ function MarketContent() {
             gap: 6,
             fontSize: 9,
             letterSpacing: "0.06em",
-            color: "#434651",
+            color: "var(--text-dim)",
           }}
         >
           <span style={{ color: "#F5A623" }}>1</span>
           <span>RUN SCANNER</span>
-          <span style={{ color: "#2A2E39" }}>→</span>
+          <span style={{ color: "var(--border-default)" }}>→</span>
           <span style={{ color: "#F5A623" }}>2</span>
           <span>SELECT MARKET</span>
-          <span style={{ color: "#2A2E39" }}>→</span>
+          <span style={{ color: "var(--border-default)" }}>→</span>
           <span style={{ color: "#F5A623" }}>3</span>
           <span>VIEW ANALYSIS</span>
         </div>
@@ -948,10 +1036,28 @@ function MarketContent() {
   const combinedTfError = chartLoadError ?? tfError;
 
   return (
-    <MarketCockpit
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      {setup.is_monitored === false && (
+        <div
+          style={{
+            padding: "6px 12px",
+            background: "#F5A62310",
+            border: "1px solid #F5A62330",
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 9,
+            color: "#F5A623",
+            letterSpacing: "0.1em",
+          }}
+        >
+          ● NOT MONITORED — analysis shows cached data only. Add to monitoring to enable live
+          tracking.
+        </div>
+      )}
+      <MarketCockpit
       setup={setup}
       candles={candles}
       analysisData={analysisData ?? undefined}
+      onAnalysisDataChange={setAnalysisData}
       analysisOverlaysReady={!analysisLoading}
       universeMarkets={universeMarkets}
       activeTimeframe={activeTimeframe}
@@ -977,6 +1083,7 @@ function MarketContent() {
       isRecomputingParams={isRecomputingParams}
       onBack={handleBackFromMarket}
     />
+    </div>
   );
 }
 

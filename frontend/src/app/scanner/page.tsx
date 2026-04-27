@@ -1,16 +1,18 @@
 "use client";
 import { Fragment, Suspense, useCallback, useEffect, useState, useRef, type ReactNode, type CSSProperties } from "react";
 import Link from "next/link";
-import { LayoutGrid, Table2 } from "lucide-react";
+import { LayoutGrid, Radar, Search, Table2 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { ScoreBar } from "@/components/score-bar";
 import { PanelEdgeCollapseToggle } from "@/components/ui/panel-edge-collapse-toggle";
+import { EmptyState } from "@/components/ui/empty-state";
 import { LiveStatusMeta, LiveStatusRow } from "@/components/ui/live-status";
 import { ScannerTableSkeleton } from "@/components/ui/page-skeleton";
 import { RelativeTimeWithTooltip } from "@/components/ui/relative-time";
 import { Tooltip } from "@/components/ui/tooltip";
 import { formatLocaleInt, formatScore } from "@/lib/format-display";
+import { scoreColor, scoreBarColor } from "@/lib/score-utils";
 import { MarketStateBadge, MarketStateDrawer } from "@/components/market-state-badge";
 import type { PaperTrade, ScanJobLog, ScanSettings, Setup, UniverseRankingStatus, UniverseSettings } from "@/lib/types";
 
@@ -30,22 +32,20 @@ interface Health {
 // ── Sub-components (inline styles, exact reference match) ─────────────────
 
 function TrendScoreDisplay({ value }: { value: number }) {
-  let color: string;
-  if (value >= 40) color = "#F5A623";
-  else if (value >= 20) color = "#D4A017";
-  else color = "#434651";
+  const color = scoreColor(value);
+  const barColor = scoreBarColor(value);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 18, fontWeight: 700, color }}>
         {formatScore(value)}
       </div>
-      <div style={{ width: "100%", height: 2, background: "#1E222D", borderRadius: 1, overflow: "hidden" }}>
+      <div style={{ width: "100%", height: 2, background: "var(--border-strong)", borderRadius: 1, overflow: "hidden" }}>
         <div
           style={{
             width: `${Math.min(100, value)}%`,
             height: "100%",
-            background: color,
+            background: barColor,
             transition: "width 0.6s ease",
           }}
         />
@@ -59,14 +59,14 @@ function DepthBadge({ depth }: { depth: number }) {
   if (depth === 1) color = "#2962FF";
   else if (depth === 2) color = "#26A69A";
   else if (depth === 3) color = "#F5A623";
-  else color = "#434651";
+  else color = "var(--text-dim)";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
       <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 16, fontWeight: 700, color }}>
         {depth}
       </div>
-      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 8, color: "#434651", letterSpacing: "0.06em" }}>
+      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 8, color: "var(--text-muted)", letterSpacing: "0.06em" }}>
         DEPTH
       </div>
     </div>
@@ -91,7 +91,7 @@ function DirectionTag({ direction }: { direction: string }) {
 
 function PhaseBadge({ phase }: { phase: string }) {
   const isRetracement = phase === "RETRACEMENT";
-  const color = isRetracement ? "#F5A623" : "#787B86";
+  const color = isRetracement ? "#F5A623" : "var(--text-dim)";
   return (
     <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color }}>
       {phase}
@@ -103,7 +103,7 @@ function FilterDivider() {
   return (
     <div
       aria-hidden
-      style={{ width: 1, alignSelf: "stretch", background: "#2A2E39", flexShrink: 0, margin: "0 10px" }}
+      style={{ width: 1, alignSelf: "stretch", background: "var(--border-default)", flexShrink: 0, margin: "0 10px" }}
     />
   );
 }
@@ -111,7 +111,7 @@ function FilterDivider() {
 const filterLabelStyle: CSSProperties = {
   fontSize: 9,
   textTransform: "uppercase",
-  color: "#787B86",
+  color: "var(--text-dim)",
   letterSpacing: "0.1em",
   marginBottom: 4,
   fontFamily: "'IBM Plex Mono', monospace",
@@ -129,9 +129,9 @@ function FilterPill({
   tooltip?: string;
 }) {
   const [hover, setHover] = useState(false);
-  const bg = active ? "#F5A623" : hover ? "#2A2E39" : "#1E222D";
-  const color = active ? "#0D0F14" : "#787B86";
-  const border = active ? "#F5A623" : "#1E222D";
+  const bg = active ? "#F5A623" : hover ? "var(--border-default)" : "var(--bg-elevated)";
+  const color = active ? "var(--bg-base)" : "var(--text-dim)";
+  const border = active ? "#F5A623" : "var(--bg-elevated)";
   const inner = (
     <button
       type="button"
@@ -179,7 +179,7 @@ function cardDepthColor(depth: number): string {
   if (depth === 1) return "#2962FF";
   if (depth === 2) return "#26A69A";
   if (depth === 3) return "#F5A623";
-  return "#434651";
+  return "var(--text-dim)";
 }
 
 type DepthFilterOption = "ALL DEPTHS" | "DEPTH 1+" | "DEPTH 2+" | "DEPTH 3";
@@ -332,12 +332,12 @@ function formatEtaSeconds(sec: number | null | undefined): string {
 
 function formatUniverseRank(rank: number | null | undefined): { text: string; color: string } {
   if (rank == null || !Number.isFinite(Number(rank))) {
-    return { text: "—", color: "#434651" };
+    return { text: "—", color: "var(--text-dim)" };
   }
   const n = Math.floor(Number(rank));
   return {
     text: `#${n}`,
-    color: n >= 1 && n <= 50 ? "#F5A623" : "#D1D4DC",
+    color: n >= 1 && n <= 50 ? "#F5A623" : "var(--text-primary)",
   };
 }
 
@@ -396,15 +396,15 @@ const scanSettingsFieldLabelStyle: CSSProperties = {
   fontSize: 9,
   textTransform: "uppercase",
   letterSpacing: "0.1em",
-  color: "#787B86",
+  color: "var(--text-dim)",
 };
 
 const scanSettingsInputBase: CSSProperties = {
   fontFamily: SCAN_SETTINGS_FONT,
   fontSize: 11,
-  color: "#FFFFFF",
-  background: "#1E222D",
-  border: "1px solid #363A45",
+  color: "var(--text-primary)",
+  background: "var(--bg-input)",
+  border: "1px solid var(--border-strong)",
   borderRadius: 0,
   padding: "6px 8px",
   outline: "none",
@@ -413,7 +413,7 @@ const scanSettingsInputBase: CSSProperties = {
 const scanSettingsHintStyle: CSSProperties = {
   fontFamily: SCAN_SETTINGS_FONT,
   fontSize: 9,
-  color: "#787B86",
+  color: "var(--text-dim)",
   marginTop: 4,
   lineHeight: 1.35,
 };
@@ -849,6 +849,19 @@ function ScannerContent() {
     updateQuery(category, nextSort);
   }
 
+  function handleClearFilters() {
+    setCategory("All");
+    setBrokerFilter("ALL");
+    setStateFilter("ALL");
+    setDepthFilter("ALL DEPTHS");
+    setMinScore(0);
+    updateQuery("All", sortBy);
+  }
+
+  function handleTriggerScan() {
+    openRankConfirm();
+  }
+
   const fetchData = useCallback(async () => {
     try {
       const [setupsData, healthData, settingsData] = await Promise.all([
@@ -922,7 +935,11 @@ function ScannerContent() {
         deriv_category_overrides: { ...scanSettings.deriv_category_overrides },
       } as ScanSettings;
       const saved = await api.saveScanSettings(payload);
-      setScanSettings({ ...DEFAULT_SCAN_SETTINGS, ...saved });
+      setScanSettings({
+        ...DEFAULT_SCAN_SETTINGS,
+        ...saved,
+        category_min_slots: saved.category_min_slots ?? scanSettings.category_min_slots,
+      });
       setIncludeInput((saved.include_symbols ?? []).join(", "));
       setExcludeInput((saved.exclude_symbols ?? []).join(", "));
       setTopNDraft(String(saved.binance_top_n));
@@ -1109,7 +1126,7 @@ function ScannerContent() {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 20px", borderBottom: "1px solid var(--border-subtle)", background: "var(--bg-elevated)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 10, color: "#3A3D48", letterSpacing: "0.1em" }}>MARKET SCANNER</span>
-          <span style={{ fontSize: 10, color: "#2A2D36" }}>v2.4</span>
+          <span style={{ fontSize: 10, color: "var(--border-default)" }}>v2.4</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
           <LiveStatusRow
@@ -1129,7 +1146,7 @@ function ScannerContent() {
               disabled={universeRankBusy}
               style={{
                 padding: "6px 14px",
-                border: "1px solid #2A2D36",
+                border: "1px solid var(--border-default)",
                 borderRadius: 2,
                 fontSize: 10,
                 color: universeRankBusy ? "#A4A7B2" : "#6B6F7A",
@@ -1148,7 +1165,7 @@ function ScannerContent() {
                       width: 10,
                       height: 10,
                       borderRadius: "50%",
-                      border: "2px solid #2A2D36",
+                      border: "2px solid var(--border-default)",
                       borderTopColor: "#F5A623",
                       animation: "scanner-spin 0.8s linear infinite",
                     }}
@@ -1165,7 +1182,7 @@ function ScannerContent() {
 
       {/* Universe Ranking Progress */}
       {(universeRankingStatus?.in_progress || rankingJustCompleted) && (
-        <div style={{ padding: "8px 20px", borderBottom: "1px solid #1C1E24", background: "#0D0F14" }}>
+        <div style={{ padding: "8px 20px", borderBottom: "1px solid var(--border-subtle)", background: "var(--bg-base)" }}>
           {rankingJustCompleted && !universeRankingStatus?.in_progress ? (
             <div style={{ fontSize: 10, color: "#4CAF7D", letterSpacing: "0.1em", fontFamily: "'IBM Plex Mono', monospace" }}>
               RANKING COMPLETE
@@ -1173,16 +1190,16 @@ function ScannerContent() {
           ) : (
             <>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                <span style={{ fontSize: 10, color: "#787B86", letterSpacing: "0.08em", fontFamily: "'IBM Plex Mono', monospace" }}>
+                <span style={{ fontSize: 10, color: "var(--text-dim)", letterSpacing: "0.08em", fontFamily: "'IBM Plex Mono', monospace" }}>
                   {universeRankingStatus?.symbols_scored ?? 0} / {universeRankingStatus?.total_symbols ?? 0} MARKETS SCORED
                 </span>
                 {universeRankingStatus?.estimated_seconds_remaining != null && (
-                  <span style={{ fontSize: 9, color: "#4A4D58", letterSpacing: "0.06em", fontFamily: "'IBM Plex Mono', monospace" }}>
+                  <span style={{ fontSize: 9, color: "var(--text-muted)", letterSpacing: "0.06em", fontFamily: "'IBM Plex Mono', monospace" }}>
                     ~{formatEtaSeconds(universeRankingStatus.estimated_seconds_remaining)} REMAINING
                   </span>
                 )}
               </div>
-              <div style={{ width: "100%", height: 2, background: "#1E222D" }}>
+              <div style={{ width: "100%", height: 2, background: "var(--bg-elevated)" }}>
                 <div
                   style={{
                     height: 2,
@@ -1195,7 +1212,7 @@ function ScannerContent() {
                 />
               </div>
               {universeRankingStatus?.current_symbol && (
-                <div style={{ marginTop: 4, fontSize: 9, color: "#4A4D58", letterSpacing: "0.06em", fontFamily: "'IBM Plex Mono', monospace" }}>
+                <div style={{ marginTop: 4, fontSize: 9, color: "var(--text-muted)", letterSpacing: "0.06em", fontFamily: "'IBM Plex Mono', monospace" }}>
                   CURRENT: {universeRankingStatus.current_symbol}
                 </div>
               )}
@@ -1220,7 +1237,7 @@ function ScannerContent() {
               fontSize: 9,
               textTransform: "uppercase",
               letterSpacing: "0.12em",
-              color: "#787B86",
+              color: "var(--text-dim)",
             }}
           >
             SCAN SETTINGS
@@ -1285,7 +1302,7 @@ function ScannerContent() {
                 }
                 .scanner-scan-settings-save:hover:not(:disabled) {
                   background: #F5A623;
-                  color: #0D0F14;
+                  color: var(--bg-base);
                 }
                 .scanner-scan-settings-save:disabled {
                   opacity: 0.5;
@@ -1301,11 +1318,11 @@ function ScannerContent() {
                   background: transparent;
                 }
                 .scanner-scan-settings-panel::-webkit-scrollbar-thumb {
-                  background: #2A2E39;
+                  background: var(--border-default);
                   border-radius: 2px;
                 }
                 .scanner-scan-settings-panel::-webkit-scrollbar-thumb:hover {
-                  background: #363A45;
+                  background: var(--border-strong);
                 }
               `}</style>
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -1350,10 +1367,10 @@ function ScannerContent() {
                               letterSpacing: "0.08em",
                               fontFamily: SCAN_SETTINGS_FONT,
                               fontWeight: active ? 700 : 400,
-                              border: `1px solid ${active ? "#F5A623" : "#363A45"}`,
+                              border: `1px solid ${active ? "#F5A623" : "var(--border-strong)"}`,
                               borderRadius: 0,
-                              background: active ? "#F5A623" : "#1E222D",
-                              color: active ? "#0D0F14" : "#787B86",
+                              background: active ? "#F5A623" : "var(--bg-elevated)",
+                              color: active ? "var(--bg-base)" : "var(--text-dim)",
                               cursor: "pointer",
                             }}
                           >
@@ -1368,7 +1385,7 @@ function ScannerContent() {
                     <div
                       style={{
                         fontSize: 8,
-                        color: "#4A4D58",
+                        color: "var(--text-muted)",
                         fontFamily: "'IBM Plex Mono', monospace",
                         letterSpacing: "0.06em",
                         marginBottom: 4,
@@ -1401,10 +1418,10 @@ function ScannerContent() {
                               letterSpacing: "0.06em",
                               fontFamily: SCAN_SETTINGS_FONT,
                               fontWeight: active ? 700 : 400,
-                              border: `1px solid ${active ? "#F5A623" : "#363A45"}`,
+                              border: `1px solid ${active ? "#F5A623" : "var(--border-strong)"}`,
                               borderRadius: 0,
-                              background: active ? "#F5A623" : "#1E222D",
-                              color: active ? "#0D0F14" : "#787B86",
+                              background: active ? "#F5A623" : "var(--bg-elevated)",
+                              color: active ? "var(--bg-base)" : "var(--text-dim)",
                               cursor: "pointer",
                               textTransform: "uppercase",
                               width: "100%",
@@ -1427,7 +1444,7 @@ function ScannerContent() {
                           ...scanSettingsInputBase,
                           resize: "vertical",
                           minHeight: 48,
-                          color: "#D1D4DC",
+                          color: "var(--text-primary)",
                         }}
                       />
                       <span style={scanSettingsHintStyle}>Comma or newline separated; merged with scan universe</span>
@@ -1443,7 +1460,7 @@ function ScannerContent() {
                           ...scanSettingsInputBase,
                           resize: "vertical",
                           minHeight: 48,
-                          color: "#D1D4DC",
+                          color: "var(--text-primary)",
                         }}
                       />
                       <span style={scanSettingsHintStyle}>Comma or newline separated; exclusions win over includes</span>
@@ -1465,10 +1482,10 @@ function ScannerContent() {
                               letterSpacing: "0.08em",
                               fontFamily: SCAN_SETTINGS_FONT,
                               fontWeight: active ? 700 : 400,
-                              border: `1px solid ${active ? "#F5A623" : "#363A45"}`,
+                              border: `1px solid ${active ? "#F5A623" : "var(--border-strong)"}`,
                               borderRadius: 0,
-                              background: active ? "#F5A623" : "#1E222D",
-                              color: active ? "#0D0F14" : "#787B86",
+                              background: active ? "#F5A623" : "var(--bg-elevated)",
+                              color: active ? "var(--bg-base)" : "var(--text-dim)",
                               cursor: "pointer",
                               textTransform: "uppercase",
                             }}
@@ -1486,10 +1503,10 @@ function ScannerContent() {
                           letterSpacing: "0.08em",
                           fontFamily: SCAN_SETTINGS_FONT,
                           fontWeight: scanSettings.scoring_profile === "custom" ? 700 : 400,
-                          border: `1px solid ${scanSettings.scoring_profile === "custom" ? "#F5A623" : "#363A45"}`,
+                          border: `1px solid ${scanSettings.scoring_profile === "custom" ? "#F5A623" : "var(--border-strong)"}`,
                           borderRadius: 0,
-                          background: scanSettings.scoring_profile === "custom" ? "#F5A623" : "#1E222D",
-                          color: scanSettings.scoring_profile === "custom" ? "#0D0F14" : "#787B86",
+                          background: scanSettings.scoring_profile === "custom" ? "#F5A623" : "var(--bg-elevated)",
+                          color: scanSettings.scoring_profile === "custom" ? "var(--bg-base)" : "var(--text-dim)",
                           cursor: "pointer",
                           textTransform: "uppercase",
                         }}
@@ -1597,9 +1614,9 @@ function ScannerContent() {
                       fontSize: 10,
                       letterSpacing: "0.08em",
                       textTransform: "uppercase",
-                      background: "#1E222D",
-                      border: "1px solid #363A45",
-                      color: "#D1D4DC",
+                      background: "var(--bg-elevated)",
+                      border: "1px solid var(--border-strong)",
+                      color: "var(--text-primary)",
                       cursor: "pointer",
                       fontFamily: '"IBM Plex Mono", monospace',
                       justifySelf: "start",
@@ -1639,10 +1656,10 @@ function ScannerContent() {
                               letterSpacing: "0.08em",
                               fontFamily: SCAN_SETTINGS_FONT,
                               fontWeight: active ? 700 : 400,
-                              border: `1px solid ${active ? "#F5A623" : "#363A45"}`,
+                              border: `1px solid ${active ? "#F5A623" : "var(--border-strong)"}`,
                               borderRadius: 0,
-                              background: active ? "#F5A623" : "#1E222D",
-                              color: active ? "#0D0F14" : "#787B86",
+                              background: active ? "#F5A623" : "var(--bg-elevated)",
+                              color: active ? "var(--bg-base)" : "var(--text-dim)",
                               cursor: "pointer",
                               textTransform: "uppercase",
                             }}
@@ -1672,10 +1689,10 @@ function ScannerContent() {
                               letterSpacing: "0.08em",
                               fontFamily: SCAN_SETTINGS_FONT,
                               fontWeight: active ? 700 : 400,
-                              border: `1px solid ${active ? "#F5A623" : "#363A45"}`,
+                              border: `1px solid ${active ? "#F5A623" : "var(--border-strong)"}`,
                               borderRadius: 0,
-                              background: active ? "#F5A623" : "#1E222D",
-                              color: active ? "#0D0F14" : "#787B86",
+                              background: active ? "#F5A623" : "var(--bg-elevated)",
+                              color: active ? "var(--bg-base)" : "var(--text-dim)",
                               cursor: "pointer",
                             }}
                           >
@@ -1704,10 +1721,10 @@ function ScannerContent() {
                               letterSpacing: "0.08em",
                               fontFamily: SCAN_SETTINGS_FONT,
                               fontWeight: active ? 700 : 400,
-                              border: `1px solid ${active ? "#F5A623" : "#363A45"}`,
+                              border: `1px solid ${active ? "#F5A623" : "var(--border-strong)"}`,
                               borderRadius: 0,
-                              background: active ? "#F5A623" : "#1E222D",
-                              color: active ? "#0D0F14" : "#787B86",
+                              background: active ? "#F5A623" : "var(--bg-elevated)",
+                              color: active ? "var(--bg-base)" : "var(--text-dim)",
                               cursor: "pointer",
                             }}
                           >
@@ -1733,10 +1750,10 @@ function ScannerContent() {
                               letterSpacing: "0.08em",
                               fontFamily: SCAN_SETTINGS_FONT,
                               fontWeight: active ? 700 : 400,
-                              border: `1px solid ${active ? "#F5A623" : "#363A45"}`,
+                              border: `1px solid ${active ? "#F5A623" : "var(--border-strong)"}`,
                               borderRadius: 0,
-                              background: active ? "#F5A623" : "#1E222D",
-                              color: active ? "#0D0F14" : "#787B86",
+                              background: active ? "#F5A623" : "var(--bg-elevated)",
+                              color: active ? "var(--bg-base)" : "var(--text-dim)",
                               cursor: "pointer",
                             }}
                           >
@@ -1795,7 +1812,7 @@ function ScannerContent() {
 
                 <div
                   style={{
-                    borderTop: "1px solid #1E222D",
+                    borderTop: "1px solid var(--bg-elevated)",
                     paddingTop: 12,
                     display: "flex",
                     flexDirection: "column",
@@ -1808,7 +1825,7 @@ function ScannerContent() {
                       fontSize: 9,
                       textTransform: "uppercase",
                       letterSpacing: "0.12em",
-                      color: "#787B86",
+                      color: "var(--text-dim)",
                     }}
                   >
                     UNIVERSE SETTINGS
@@ -1825,9 +1842,9 @@ function ScannerContent() {
                           letterSpacing: "0.08em",
                           fontFamily: SCAN_SETTINGS_FONT,
                           fontWeight: universeSettingsTab === tab.key ? 700 : 400,
-                          border: `1px solid ${universeSettingsTab === tab.key ? "#F5A623" : "#363A45"}`,
-                          background: universeSettingsTab === tab.key ? "#F5A623" : "#1E222D",
-                          color: universeSettingsTab === tab.key ? "#0D0F14" : "#787B86",
+                          border: `1px solid ${universeSettingsTab === tab.key ? "#F5A623" : "var(--border-strong)"}`,
+                          background: universeSettingsTab === tab.key ? "#F5A623" : "var(--bg-elevated)",
+                          color: universeSettingsTab === tab.key ? "var(--bg-base)" : "var(--text-dim)",
                           cursor: "pointer",
                           textTransform: "uppercase",
                         }}
@@ -1875,7 +1892,7 @@ function ScannerContent() {
                           style={{ ...scanSettingsInputBase, width: "100%", boxSizing: "border-box" }}
                         >
                           {UNIVERSE_RANK_FREQUENCY_OPTIONS.map((opt) => (
-                            <option key={opt} value={opt} style={{ background: "#131722", color: "#D1D4DC" }}>
+                            <option key={opt} value={opt} style={{ background: "var(--bg-surface)", color: "var(--text-primary)" }}>
                               {opt.toUpperCase()}
                             </option>
                           ))}
@@ -1894,7 +1911,7 @@ function ScannerContent() {
                           style={{ ...scanSettingsInputBase, width: "100%", boxSizing: "border-box" }}
                         >
                           {UNIVERSE_REFRESH_HOUR_OPTIONS.map((opt) => (
-                            <option key={opt} value={opt} style={{ background: "#131722", color: "#D1D4DC" }}>
+                            <option key={opt} value={opt} style={{ background: "var(--bg-surface)", color: "var(--text-primary)" }}>
                               {opt}h
                             </option>
                           ))}
@@ -1922,7 +1939,7 @@ function ScannerContent() {
                       </button>
                     </div>
                   ) : (
-                    <div style={{ ...scanSettingsHintStyle, color: "#4A4D58" }}>
+                    <div style={{ ...scanSettingsHintStyle, color: "var(--text-muted)" }}>
                       Universe settings unavailable — backend may not be reachable.
                     </div>
                   )}
@@ -2014,8 +2031,8 @@ function ScannerContent() {
         style={{
           display: "flex",
           gap: 0,
-          borderBottom: "1px solid #1E222D",
-          background: "#0D0F14",
+          borderBottom: "1px solid var(--border-subtle)",
+          background: "var(--bg-base)",
           padding: "0 20px",
           alignItems: "center",
         }}
@@ -2032,7 +2049,7 @@ function ScannerContent() {
               borderBottom: activeUniverse === tab.key
                 ? "2px solid #F5A623"
                 : "2px solid transparent",
-              color: activeUniverse === tab.key ? "#F5A623" : "#4A4D58",
+              color: activeUniverse === tab.key ? "#F5A623" : "var(--text-muted)",
               fontFamily: "'IBM Plex Mono', monospace",
               fontSize: 10,
               letterSpacing: "0.12em",
@@ -2054,10 +2071,10 @@ function ScannerContent() {
               marginLeft: 12,
               fontFamily: "'IBM Plex Mono', monospace",
               fontSize: 8,
-              color: "#4A4D58",
+              color: "var(--text-muted)",
               letterSpacing: "0.08em",
               padding: "2px 8px",
-              border: "1px solid #1E222D",
+              border: "1px solid var(--bg-elevated)",
               borderRadius: 2,
             }}
           >
@@ -2099,9 +2116,9 @@ function ScannerContent() {
           flexWrap: "wrap",
           alignItems: "flex-end",
           gap: 0,
-          padding: "10px 20px",
-          borderBottom: "1px solid var(--border-subtle)",
-          background: "var(--bg-surface)",
+          padding: "8px 12px",
+          borderBottom: "1px solid var(--border-default)",
+          background: "var(--bg-elevated)",
         }}
       >
         <div style={{ display: "flex", flexDirection: "column" }}>
@@ -2160,10 +2177,10 @@ function ScannerContent() {
             style={{
               fontSize: 10,
               padding: "4px 8px",
-              border: "1px solid #2A2E39",
+              border: "1px solid var(--border-default)",
               borderRadius: 2,
-              background: "#1E222D",
-              color: "#787B86",
+              background: "var(--bg-elevated)",
+              color: "var(--text-dim)",
               fontFamily: "'IBM Plex Mono', monospace",
               letterSpacing: "0.08em",
               outline: "none",
@@ -2172,7 +2189,7 @@ function ScannerContent() {
             }}
           >
             {DEPTH_FILTER_OPTIONS.map((option) => (
-              <option key={option} value={option} style={{ background: "#131722", color: "#D1D4DC" }}>
+              <option key={option} value={option} style={{ background: "var(--bg-surface)", color: "var(--text-primary)" }}>
                 {option}
               </option>
             ))}
@@ -2196,9 +2213,9 @@ function ScannerContent() {
             style={{
               width: 56,
               fontSize: 11,
-              background: "#1E222D",
-              color: "#D1D4DC",
-              border: "1px solid #2A2E39",
+              background: "var(--bg-elevated)",
+              color: "var(--text-primary)",
+              border: "1px solid var(--border-default)",
               padding: "4px 6px",
               fontFamily: "'IBM Plex Mono', monospace",
             }}
@@ -2263,9 +2280,9 @@ function ScannerContent() {
               onClick={() => setListView("table")}
               style={{
                 padding: 6,
-                border: `1px solid ${listView === "table" ? "#F5A623" : "#2A2E39"}`,
+                border: `1px solid ${listView === "table" ? "#F5A623" : "var(--border-default)"}`,
                 background: listView === "table" ? "rgba(245,166,35,0.12)" : "transparent",
-                color: listView === "table" ? "#F5A623" : "#787B86",
+                color: listView === "table" ? "#F5A623" : "var(--text-dim)",
                 cursor: "pointer",
                 display: "inline-flex",
                 alignItems: "center",
@@ -2284,9 +2301,9 @@ function ScannerContent() {
               onClick={() => setListView("card")}
               style={{
                 padding: 6,
-                border: `1px solid ${listView === "card" ? "#F5A623" : "#2A2E39"}`,
+                border: `1px solid ${listView === "card" ? "#F5A623" : "var(--border-default)"}`,
                 background: listView === "card" ? "rgba(245,166,35,0.12)" : "transparent",
-                color: listView === "card" ? "#F5A623" : "#787B86",
+                color: listView === "card" ? "#F5A623" : "var(--text-dim)",
                 cursor: "pointer",
                 display: "inline-flex",
                 alignItems: "center",
@@ -2308,15 +2325,24 @@ function ScannerContent() {
             API unavailable
           </div>
         )}
-        {!loading && !error && filtered.length === 0 && (
-          <div style={{ padding: "40px 28px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
-            <div style={{ border: "1px solid #F5A623", borderRadius: "50%", width: 32, height: 32 }} />
-            <div style={{ fontSize: 11, color: "#3A3D48", letterSpacing: "0.14em" }}>
-              NO MARKETS LOADED
-            </div>
-            <div style={{ fontSize: 9, color: "#2A2D36" }}>
-              RUN RANK UNIVERSE TO POPULATE THE UNIVERSE
-            </div>
+        {!loading && !error && filteredByUniverse.length === 0 && (
+          <div style={{ padding: "32px 28px" }}>
+            <EmptyState
+              icon={<Radar size={24} />}
+              title="Universe is empty"
+              message="Run a scan to populate the monitored universe."
+              action={{ label: "Run Scan", onClick: handleTriggerScan }}
+            />
+          </div>
+        )}
+        {!loading && !error && filteredByUniverse.length > 0 && filtered.length === 0 && (
+          <div style={{ padding: "32px 28px" }}>
+            <EmptyState
+              icon={<Search size={24} />}
+              title="No markets match"
+              message="Try adjusting your filters or running a fresh scan."
+              action={{ label: "Clear Filters", onClick: handleClearFilters }}
+            />
           </div>
         )}
         {!loading && !error && listView === "table" &&
@@ -2377,7 +2403,7 @@ function ScannerContent() {
                         ? "#F5A623"
                         : setup.current_phase === "impulse"
                           ? "#26A69A"
-                          : "#1E222D",
+                          : "var(--bg-elevated)",
                     boxShadow: openPaper
                       ? "2px 0 8px rgba(123,97,255,0.35)"
                       : setup.fsm_state === "MONITORING" && setup.current_phase === "retracement"
@@ -2427,10 +2453,13 @@ function ScannerContent() {
                         <div
                           style={{
                             fontFamily: "'IBM Plex Mono', monospace",
-                            fontSize: 8,
-                            color: "#4A4D58",
-                            letterSpacing: "0.06em",
-                            marginTop: 2,
+                            fontSize: 9,
+                            color: "var(--text-secondary)",
+                            letterSpacing: "0.04em",
+                            marginTop: 3,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
                           }}
                         >
                           {setup.display_name}
@@ -2444,8 +2473,8 @@ function ScannerContent() {
                             fontFamily: "'IBM Plex Mono', monospace",
                             fontSize: 7,
                             letterSpacing: "0.08em",
-                            color: "#787B86",
-                            border: "1px solid #2A2E39",
+                            color: "var(--text-dim)",
+                            border: "1px solid var(--border-default)",
                             padding: "1px 5px",
                             borderRadius: 2,
                             textTransform: "uppercase",
@@ -2555,7 +2584,7 @@ function ScannerContent() {
                   style={{
                     border: "1px solid var(--border-subtle)",
                     borderLeft: openPaper ? "3px solid #7B61FF" : undefined,
-                    background: setup.fsm_state === "MONITORING" ? "rgba(245,166,35,0.04)" : "var(--bg-elevated)",
+                    background: setup.fsm_state === "MONITORING" ? "rgba(245,166,35,0.04)" : "var(--bg-surface)",
                     padding: 12,
                     cursor: "pointer",
                     display: "flex",
@@ -2563,84 +2592,88 @@ function ScannerContent() {
                     gap: 8,
                   }}
                 >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "0.02em", display: "inline-flex", alignItems: "center" }}>
-                        {symbolsWithOverrides.has(symbol) && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "0.02em", display: "inline-flex", alignItems: "center" }}>
+                          {symbolsWithOverrides.has(symbol) && (
+                            <span
+                              title="Manual override active"
+                              style={{
+                                width: 5,
+                                height: 5,
+                                borderRadius: "50%",
+                                background: "#F5A623",
+                                display: "inline-block",
+                                marginRight: 4,
+                                flexShrink: 0,
+                              }}
+                            />
+                          )}
+                          {symbol}
+                        </div>
+                        {setup.sector && (
                           <span
-                            title="Manual override active"
                             style={{
-                              width: 5,
-                              height: 5,
-                              borderRadius: "50%",
-                              background: "#F5A623",
-                              display: "inline-block",
-                              marginRight: 4,
-                              flexShrink: 0,
+                              fontFamily: "'IBM Plex Mono', monospace",
+                              fontSize: 7,
+                              letterSpacing: "0.08em",
+                              color: "var(--text-dim)",
+                              border: "1px solid var(--border-default)",
+                              padding: "1px 5px",
+                              borderRadius: 2,
+                              textTransform: "uppercase",
                             }}
-                          />
+                          >
+                            {setup.sector}
+                          </span>
                         )}
-                        {symbol}
+                        {openPaper ? <OpenPaperTradeBadge trade={openPaper} /> : null}
                       </div>
-                      {setup.sector && (
-                        <span
+                      <Tooltip content="Remove this setup from scanner">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleDropSetup(symbol);
+                          }}
+                          disabled={isDropping}
                           style={{
-                            fontFamily: "'IBM Plex Mono', monospace",
-                            fontSize: 7,
+                            border: "1px solid var(--border-default)",
+                            background: "var(--border-default)",
+                            padding: "2px 6px",
+                            fontSize: 9,
                             letterSpacing: "0.08em",
-                            color: "#787B86",
-                            border: "1px solid #2A2E39",
-                            padding: "1px 5px",
+                            color: "var(--text-secondary)",
+                            cursor: isDropping ? "default" : "pointer",
+                            opacity: isDropping ? 0.5 : 1,
                             borderRadius: 2,
-                            textTransform: "uppercase",
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            flexShrink: 0,
                           }}
                         >
-                          {setup.sector}
-                        </span>
-                      )}
-                      {openPaper ? <OpenPaperTradeBadge trade={openPaper} /> : null}
+                          {isDropping ? "..." : "DROP"}
+                        </button>
+                      </Tooltip>
                     </div>
                     {setup.category === "equities" &&
                       setup.display_name &&
                       setup.display_name !== setup.symbol && (
                         <div
                           style={{
-                            width: "100%",
                             fontFamily: "'IBM Plex Mono', monospace",
-                            fontSize: 8,
-                            color: "#4A4D58",
-                            letterSpacing: "0.06em",
-                            marginTop: -4,
+                            fontSize: 9,
+                            color: "var(--text-secondary)",
+                            letterSpacing: "0.04em",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            maxWidth: "100%",
                           }}
                         >
                           {setup.display_name}
                         </div>
                       )}
-                    <Tooltip content="Remove this setup from scanner">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleDropSetup(symbol);
-                        }}
-                        disabled={isDropping}
-                        style={{
-                          border: "1px solid var(--border-default)",
-                          background: "var(--border-default)",
-                          padding: "2px 6px",
-                          fontSize: 9,
-                          letterSpacing: "0.08em",
-                          color: "var(--text-secondary)",
-                          cursor: isDropping ? "default" : "pointer",
-                          opacity: isDropping ? 0.5 : 1,
-                          borderRadius: 2,
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          flexShrink: 0,
-                        }}
-                      >
-                        {isDropping ? "..." : "DROP"}
-                      </button>
-                    </Tooltip>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                     <DirectionTag direction={direction} />
@@ -2662,7 +2695,7 @@ function ScannerContent() {
                     }}
                   >
                     {depth}
-                    <span style={{ fontSize: 9, color: "#434651", marginLeft: 6, letterSpacing: "0.06em" }}>DEPTH</span>
+                    <span style={{ fontSize: 9, color: "var(--text-muted)", marginLeft: 6, letterSpacing: "0.06em" }}>DEPTH</span>
                   </div>
                 </div>
               );
@@ -2684,7 +2717,7 @@ function ScannerContent() {
             href="/universe"
             style={{
               fontSize: 9,
-              color: "#434651",
+              color: "var(--text-dim)",
               letterSpacing: "0.1em",
               textDecoration: "none",
             }}
@@ -2706,8 +2739,8 @@ function ScannerContent() {
         >
           <div
             style={{
-              background: "#0D0F14",
-              border: "1px solid #2A2E39",
+              background: "var(--bg-surface)",
+              border: "1px solid var(--border-default)",
               padding: "24px 28px",
               minWidth: 340,
               maxWidth: 420,
@@ -2715,30 +2748,30 @@ function ScannerContent() {
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.16em", color: "#D1D4DC", marginBottom: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.16em", color: "var(--text-primary)", marginBottom: 20 }}>
               RANK UNIVERSE
             </div>
             {rankDialogLoading ? (
-              <div style={{ fontSize: 10, color: "#4A4D58", marginBottom: 20 }}>Loading...</div>
+              <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 20 }}>Loading...</div>
             ) : (() => {
               const lastJob = getLatestFinishedUniverseRanking(rankDialogLogs);
               return (
                 <div style={{ display: "grid", gap: 10, marginBottom: 20 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                    <span style={{ fontSize: 9, color: "#787B86", letterSpacing: "0.1em" }}>LAST COMPLETED</span>
-                    <span style={{ fontSize: 9, color: "#D1D4DC" }}>
+                    <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.1em" }}>LAST COMPLETED</span>
+                    <span style={{ fontSize: 9, color: "var(--text-primary)" }}>
                       {formatUtcTimestamp(lastJob?.completed_at)}
                     </span>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                    <span style={{ fontSize: 9, color: "#787B86", letterSpacing: "0.1em" }}>NEXT SCHEDULED</span>
-                    <span style={{ fontSize: 9, color: "#D1D4DC" }}>
+                    <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.1em" }}>NEXT SCHEDULED</span>
+                    <span style={{ fontSize: 9, color: "var(--text-primary)" }}>
                       {mounted ? formatUtcTimestamp(nextMidnightUtc().toISOString()) : "—"}
                     </span>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                    <span style={{ fontSize: 9, color: "#787B86", letterSpacing: "0.1em" }}>LAST DURATION</span>
-                    <span style={{ fontSize: 9, color: "#D1D4DC" }}>
+                    <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.1em" }}>LAST DURATION</span>
+                    <span style={{ fontSize: 9, color: "var(--text-primary)" }}>
                       {formatDurationSeconds(lastJob?.duration_seconds)}
                     </span>
                   </div>
@@ -2751,8 +2784,8 @@ function ScannerContent() {
                 onClick={() => setRankConfirmOpen(false)}
                 style={{
                   fontSize: 10, padding: "6px 14px",
-                  border: "1px solid #2A2E39", background: "transparent",
-                  color: "#787B86", cursor: "pointer", letterSpacing: "0.08em",
+                  border: "1px solid var(--border-default)", background: "transparent",
+                  color: "var(--text-dim)", cursor: "pointer", letterSpacing: "0.08em",
                   fontFamily: "'IBM Plex Mono', monospace",
                 }}
               >

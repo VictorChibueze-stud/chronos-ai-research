@@ -10,6 +10,7 @@ import { MarketStateBadge, MarketStateDrawer } from "@/components/market-state-b
 import { LiveStatusMeta, LiveStatusRow } from "@/components/ui/live-status";
 import { Tooltip } from "@/components/ui/tooltip";
 import { formatLocaleInt, formatScore } from "@/lib/format-display";
+import { scoreColor } from "@/lib/score-utils";
 import { api } from "@/lib/api";
 import {
   computeMetCount,
@@ -68,10 +69,10 @@ function pillStyle(active: boolean): CSSProperties {
     fontSize: 9,
     letterSpacing: "0.08em",
     fontFamily: "'IBM Plex Mono', monospace",
-    border: active ? "1px solid #F5A623" : "1px solid #1C1E24",
+    border: active ? "1px solid #F5A623" : "1px solid var(--border-subtle)",
     borderRadius: 2,
     background: active ? "#F5A623" : "transparent",
-    color: active ? "#0D0F14" : "#787B86",
+    color: active ? "var(--bg-base)" : "var(--text-dim)",
     cursor: "pointer",
   };
 }
@@ -95,7 +96,7 @@ function SummaryMetric({
         fontFamily: "'IBM Plex Mono', monospace",
         fontSize: 9,
         letterSpacing: "0.14em",
-        color: "#787B86",
+        color: "var(--text-dim)",
         marginTop: 6,
         textAlign: "center",
         cursor: tooltip ? "help" : undefined,
@@ -156,7 +157,7 @@ function SignalBoardSkeleton() {
             key={i}
             style={{
               height: 60,
-              background: "#111318",
+              background: "var(--bg-elevated)",
               borderRadius: 2,
               animation: "card-pulse 1.5s ease-in-out infinite",
             }}
@@ -168,7 +169,7 @@ function SignalBoardSkeleton() {
           key={i}
           style={{
             height: 90,
-            background: "#111318",
+            background: "var(--bg-elevated)",
             borderRadius: 2,
             animation: "card-pulse 1.5s ease-in-out infinite",
             animationDelay: `${i * 0.1}s`,
@@ -221,13 +222,13 @@ function PipelineStrip({ row, flags }: { row: SignalRow; flags: ReturnType<typeo
                   width: 12,
                   height: 12,
                   borderRadius: 9999,
-                  background: met ? "#F5A623" : "#2A2E39",
+                  background: met ? "#F5A623" : "var(--border-default)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                 }}
               >
-                {met ? <Check size={8} strokeWidth={3} color="#0D0F14" aria-hidden /> : null}
+                {met ? <Check size={8} strokeWidth={3} color="var(--bg-base)" aria-hidden /> : null}
               </div>
               {step.id === "depth" ? (
                 <span
@@ -248,7 +249,7 @@ function PipelineStrip({ row, flags }: { row: SignalRow; flags: ReturnType<typeo
                     fontFamily: "'IBM Plex Mono', monospace",
                     fontSize: 8,
                     letterSpacing: "0.06em",
-                    color: met ? "#787B86" : "#4A4D58",
+                    color: met ? "var(--text-dim)" : "var(--text-muted)",
                     textAlign: "center",
                     lineHeight: 1.1,
                     cursor: "help",
@@ -259,7 +260,7 @@ function PipelineStrip({ row, flags }: { row: SignalRow; flags: ReturnType<typeo
               </Tooltip>
             </div>
             {i < PIPELINE_STEPS.length - 1 ? (
-              <span style={{ color: "#4A4D58", fontSize: 10, marginTop: 1, flexShrink: 0, lineHeight: "12px" }}>
+              <span style={{ color: "var(--text-muted)", fontSize: 10, marginTop: 1, flexShrink: 0, lineHeight: "12px" }}>
                 →
               </span>
             ) : null}
@@ -345,7 +346,7 @@ function SignalBoardContent() {
         flex: 1,
         overflow: "auto",
         padding: "20px",
-        background: "#0D0F14",
+        background: "var(--bg-base)",
         fontFamily: "'IBM Plex Mono', monospace",
         display: "flex",
         flexDirection: "column",
@@ -360,7 +361,7 @@ function SignalBoardContent() {
         @media (max-width: 640px) {
           .signal-board-grid { grid-template-columns: minmax(0, 1fr) !important; }
         }
-        .signal-readiness-card:hover { border-color: #363A45 !important; }
+        .signal-readiness-card:hover { border-color: var(--border-strong) !important; }
       `}</style>
 
       <div
@@ -377,7 +378,7 @@ function SignalBoardContent() {
           <h1 style={{ margin: 0, fontSize: 11, fontWeight: 600, letterSpacing: "0.18em", color: "var(--text-primary)" }}>
             SIGNAL BOARD
           </h1>
-          <p style={{ margin: "8px 0 0", fontSize: 10, letterSpacing: "0.1em", color: "#787B86", fontWeight: 500 }}>
+          <p style={{ margin: "8px 0 0", fontSize: 10, letterSpacing: "0.1em", color: "var(--text-dim)", fontWeight: 500 }}>
             {universeFilter === "all"
               ? "TOP 50 ACROSS ALL UNIVERSES"
               : `TOP 50 · ${universeFilter.toUpperCase().replace("_", "-")} UNIVERSE`}
@@ -429,7 +430,7 @@ function SignalBoardContent() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 9, color: "#787B86", letterSpacing: "0.12em", minWidth: 56 }}>UNIVERSE</span>
+          <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.12em", minWidth: 56 }}>UNIVERSE</span>
           {(
             [
               { key: "all", label: "ALL", tooltip: "Show top signals across all universes" },
@@ -446,7 +447,7 @@ function SignalBoardContent() {
           ))}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 9, color: "#787B86", letterSpacing: "0.12em", minWidth: 56 }}>TREND</span>
+          <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.12em", minWidth: 56 }}>TREND</span>
           {(["ALL", "LONG", "SHORT"] as const).map((key) => (
             <Tooltip key={key} content={key === "ALL" ? "All trends" : key === "LONG" ? "Uptrend only" : "Downtrend only"}>
               <button type="button" onClick={() => setTrendFilter(key)} style={pillStyle(trendFilter === key)}>
@@ -456,7 +457,7 @@ function SignalBoardContent() {
           ))}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 9, color: "#787B86", letterSpacing: "0.12em", minWidth: 56 }}>ASSET</span>
+          <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.12em", minWidth: 56 }}>ASSET</span>
           {ASSET_PILLS.map((key) => (
             <Tooltip
               key={key}
@@ -469,7 +470,7 @@ function SignalBoardContent() {
           ))}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 9, color: "#787B86", letterSpacing: "0.12em", minWidth: 56 }}>READINESS</span>
+          <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.12em", minWidth: 56 }}>READINESS</span>
           {(["ALL", "FULL", "PARTIAL", "EARLY"] as const).map((key) => (
             <Tooltip key={key} content={`Readiness: ${key}`}>
               <button type="button" onClick={() => setReadinessFilter(key)} style={pillStyle(readinessFilter === key)}>
@@ -488,7 +489,7 @@ function SignalBoardContent() {
             [SYSTEM]: CONNECTION LOST
           </div>
         ) : filteredRows.length === 0 ? (
-          <div style={{ padding: 24, color: "#787B86", fontSize: 11, textAlign: "center" }}>
+          <div style={{ padding: 24, color: "var(--text-dim)", fontSize: 11, textAlign: "center" }}>
             No setups match these filters in the current top 50.
           </div>
         ) : (
@@ -519,8 +520,8 @@ function SignalBoardContent() {
                   }}
                   style={{
                     textAlign: "left",
-                    background: "#0E1014",
-                    border: "1px solid #1E222D",
+                    background: "var(--bg-surface)",
+                    border: "1px solid var(--border-subtle)",
                     borderRadius: 2,
                     padding: "12px 14px",
                     cursor: "pointer",
@@ -531,11 +532,30 @@ function SignalBoardContent() {
                   <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
                       <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text-primary)" }}>{row.symbol}</span>
+                      {row.category === "equities" &&
+                        row.display_name &&
+                        row.display_name !== row.symbol && (
+                          <div
+                            style={{
+                              fontFamily: "'IBM Plex Mono', monospace",
+                              fontSize: 9,
+                              color: "var(--text-secondary)",
+                              letterSpacing: "0.04em",
+                              marginTop: 2,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                              maxWidth: 140,
+                            }}
+                          >
+                            {row.display_name}
+                          </div>
+                        )}
                       <span
                         style={{
                           fontSize: 12,
                           fontWeight: 700,
-                          color: row.trend === "up" ? "#26A69A" : row.trend === "down" ? "#EF5350" : "#787B86",
+                          color: row.trend === "up" ? "#26A69A" : row.trend === "down" ? "#EF5350" : "var(--text-dim)",
                         }}
                       >
                         {row.trend === "up" ? "▲" : row.trend === "down" ? "▼" : "—"}
@@ -544,8 +564,8 @@ function SignalBoardContent() {
                         style={{
                           fontSize: 8,
                           letterSpacing: "0.1em",
-                          color: "#787B86",
-                          border: "1px solid #1E222D",
+                          color: "var(--text-dim)",
+                          border: "1px solid var(--bg-elevated)",
                           padding: "2px 6px",
                           borderRadius: 2,
                         }}
@@ -562,7 +582,7 @@ function SignalBoardContent() {
                         />
                       </div>
                     </div>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: "#F5A623", flexShrink: 0 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: scoreColor(row.trend_score), flexShrink: 0 }}>
                       {formatScore(row.trend_score)}
                     </span>
                   </div>
@@ -571,7 +591,7 @@ function SignalBoardContent() {
                     style={{
                       marginTop: 10,
                       fontSize: 10,
-                      color: "#4A4D58",
+                      color: "var(--text-muted)",
                       lineHeight: 1.35,
                       overflow: "hidden",
                       textOverflow: "ellipsis",
@@ -604,3 +624,4 @@ export default function SignalsPage() {
     </QueryProvider>
   );
 }
+

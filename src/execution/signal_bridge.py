@@ -70,48 +70,68 @@ def _compute_ema(prices: list[float], period: int) -> list[float]:
 
 def _detect_ema_crossover(
     candles: list[Any],
-    fast_period: int,
-    slow_period: int,
-    direction: str,
+    fast_period: int = 9,
+    slow_period: int = 21,
+    direction: str = "up",
+    lookback: int = 1,
 ) -> Optional[float]:
     """
-    Check if EMA fast crossed EMA slow on the most recent
-    completed candle in the correct direction.
+    Detect an EMA crossover in any of the last ``lookback``
+    completed candles.
 
-    direction: "up" checks for fast crossing above slow (long)
-               "down" checks for fast crossing below slow (short)
+    The candle at ``candles[-1]`` is treated as the current
+    (potentially still forming) candle and is NOT checked.
+    The most recent completed candle is ``candles[-2]``.
 
-    Returns the close price of the crossover candle if crossover
-    detected on the last candle, else None.
+    For ``lookback=N`` the function scans offsets
+    0..N-1 and for each offset checks the crossover at
+    ``candles[i]`` vs ``candles[i-1]`` where
+    ``i = len(candles) - 2 - offset``.
 
-    Crossover is confirmed when:
-    - On candle[-2]: fast was on the wrong side of slow
-    - On candle[-1]: fast is now on the correct side of slow
+    direction: "up"   fast crosses above slow (long)
+               "down" fast crosses below slow (short)
+
+    Returns the close price of the first crossover candle
+    found (walking from most recent backwards), or ``None``.
     """
-    if len(candles) < slow_period + 2:
+    if len(candles) < slow_period + lookback + 1:
         return None
 
     closes = [float(c.close) for c in candles]
-    fast = _compute_ema(closes, fast_period)
-    slow = _compute_ema(closes, slow_period)
 
-    # Last two valid values
-    n = len(closes)
-    f1, s1 = fast[n - 2], slow[n - 2]  # previous candle
-    f0, s0 = fast[n - 1], slow[n - 1]  # current/last candle
+    def _ema(prices: list[float], period: int) -> list[float]:
+        # Simple first-value-seeded EMA: matches the crossover
+        # semantics this detector is calibrated against.
+        k = 2.0 / (period + 1)
+        ema = [prices[0]]
+        for p in prices[1:]:
+            ema.append(p * k + ema[-1] * (1 - k))
+        return ema
 
-    if any(v != v for v in [f1, s1, f0, s0]):
-        # NaN check
-        return None
+    ema_fast = _ema(closes, fast_period)
+    ema_slow = _ema(closes, slow_period)
 
-    if direction == "up":
-        # Bullish crossover: fast was below slow, now above
-        if f1 < s1 and f0 > s0:
-            return closes[-1]
-    elif direction == "down":
-        # Bearish crossover: fast was above slow, now below
-        if f1 > s1 and f0 < s0:
-            return closes[-1]
+    for offset in range(lookback):
+        i = len(closes) - 2 - offset
+        if i < 1:
+            continue
+
+        fast_now = ema_fast[i]
+        slow_now = ema_slow[i]
+        fast_prev = ema_fast[i - 1]
+        slow_prev = ema_slow[i - 1]
+
+        if any(v != v for v in (fast_now, slow_now, fast_prev, slow_prev)):
+            # One of the EMAs is NaN (not enough data yet at this index)
+            continue
+
+        if direction == "up":
+            crossed = fast_prev <= slow_prev and fast_now > slow_now
+        else:
+            crossed = fast_prev >= slow_prev and fast_now < slow_now
+
+        if crossed:
+            return float(candles[i].close)
 
     return None
 
@@ -310,6 +330,97 @@ def check_entry_signals(
         ):
             continue
 
+        # --- FUNDAMENTALS GATE ---
+        # Skip for synthetic markets — they are not affected by
+        # real-world macro events.
+        is_synthetic = any(
+            m in symbol.upper()
+            for m in (
+                "1HZ", "R_", "BOOM", "CRASH",
+                "STEP", "JUMP", "RANGE",
+            )
+        )
+
+        if not is_synthetic:
+            # CHECK 1: Calendar blackout gate.
+            # Blocks entries before/after scheduled high-impact
+            # macro events (NFP, FOMC, etc.).
+            try:
+                from src.fundamentals.event_gate import (
+                    is_trading_clear,
+                )
+                from datetime import datetime, timezone
+                clear, reason = is_trading_clear(
+                    symbol,
+                    datetime.now(timezone.utc),
+                )
+                if not clear:
+                    logger.info(
+                        "Entry blocked for %s — calendar gate: %s",
+                        symbol,
+                        reason,
+                    )
+                    continue
+            except Exception as e:
+                logger.warning(
+                    "Calendar gate check failed for %s: %s — "
+                    "allowing entry",
+                    symbol,
+                    e,
+                )
+
+            # CHECK 2: LLM veto flag.
+            # Blocks entries when LLM intelligence has identified a
+            # genuine macro shock.
+            try:
+                veto_flag = getattr(
+                    setup, "critical_veto_flag", False
+                )
+                if veto_flag:
+                    from src.fundamentals.models import (
+                        FundamentalStory,
+                    )
+                    story = (
+                        db.query(FundamentalStory)
+                        .filter(FundamentalStory.symbol == symbol)
+                        .first()
+                    )
+                    if story is not None:
+                        expires = story.veto_expires_at
+                        if (
+                            expires is not None
+                            and datetime.now(timezone.utc) > expires
+                        ):
+                            # Veto window has elapsed — clear the
+                            # flag and allow entry.
+                            setup.critical_veto_flag = False
+                            try:
+                                db.commit()
+                            except Exception:
+                                pass
+                            veto_flag = False
+
+                    if veto_flag:
+                        reason = (
+                            story.veto_reason
+                            if story
+                            else "LLM veto active"
+                        )
+                        logger.info(
+                            "Entry blocked for %s — LLM veto: %s",
+                            symbol,
+                            reason,
+                        )
+                        continue
+            except Exception as e:
+                logger.warning(
+                    "Veto flag check failed for %s: %s — "
+                    "allowing entry",
+                    symbol,
+                    e,
+                )
+        # --- END FUNDAMENTALS GATE ---
+
         # Check concurrent position limit
         open_count = _count_open_positions(account.id, db)
         if open_count >= account.max_concurrent_positions:
@@ -328,21 +439,25 @@ def check_entry_signals(
                 symbol, account.entry_timeframe, db
             )
         except Exception as e:
-            logger.debug(
-                "Cannot fetch %s candles for %s: %s",
+            logger.warning(
+                "Entry signal check: cannot fetch %s candles "
+                "for %s — skipping: %s",
                 account.entry_timeframe, symbol, e
             )
             continue
 
-        if len(entry_candles) < account.entry_ema_slow + 5:
+        lookback = int(getattr(account, "entry_lookback_candles", 3) or 3)
+
+        if len(entry_candles) < account.entry_ema_slow + lookback + 1:
             continue
 
-        # Check EMA crossover
+        # Check EMA crossover within the configured lookback window
         entry_price = _detect_ema_crossover(
             entry_candles,
             fast_period=account.entry_ema_fast,
             slow_period=account.entry_ema_slow,
             direction=direction,
+            lookback=lookback,
         )
 
         if entry_price is None:

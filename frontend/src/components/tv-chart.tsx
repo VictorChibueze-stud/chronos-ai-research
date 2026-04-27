@@ -35,20 +35,20 @@ export function TvChart({ data, zones }: TvChartProps) {
       width: containerRef.current.clientWidth,
       height: containerRef.current.clientHeight,
       layout: {
-        background: { type: ColorType.Solid, color: "#131722" },
-        textColor: "#D1D4DC",
+        background: { type: ColorType.Solid, color: "var(--bg-surface)" },
+        textColor: "var(--text-primary)",
         fontFamily: "'IBM Plex Mono', monospace",
       },
       grid: {
-        vertLines: { color: "#2A2E39" },
-        horzLines: { color: "#2A2E39" },
+        vertLines: { color: "var(--border-default)" },
+        horzLines: { color: "var(--border-default)" },
       },
       crosshair: { mode: 0 },
       rightPriceScale: {
-        borderColor: "#2A2E39",
+        borderColor: "var(--border-default)",
       },
       timeScale: {
-        borderColor: "#2A2E39",
+        borderColor: "var(--border-default)",
       },
     });
 

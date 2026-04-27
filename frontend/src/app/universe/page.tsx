@@ -29,7 +29,7 @@ function UniversePageSkeleton() {
             key={i}
             style={{
               height: 72,
-              background: "#111318",
+              background: "var(--bg-elevated)",
               borderRadius: 2,
               animation: "card-pulse 1.5s ease-in-out infinite",
             }}
@@ -41,7 +41,7 @@ function UniversePageSkeleton() {
           key={i}
           style={{
             height: 44,
-            background: "#111318",
+            background: "var(--bg-elevated)",
             borderRadius: 2,
             animation: "card-pulse 1.5s ease-in-out infinite",
             animationDelay: `${i * 0.08}s`,
@@ -58,7 +58,7 @@ const CENTERED_STATUS_STYLE: CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   height: "100%",
-  background: "#0D0F14",
+  background: "var(--bg-base)",
   color: "#F5A623",
   fontFamily: '"IBM Plex Mono", monospace',
   fontSize: 11,
@@ -148,7 +148,7 @@ export default function UniversePage() {
 
   if (loading) {
     return (
-      <div className="flex h-full min-h-0 flex-1 flex-col overflow-auto bg-[#131722]">
+      <div className="flex h-full min-h-0 flex-1 flex-col overflow-auto bg-background-surface">
         <UniversePageSkeleton />
       </div>
     );

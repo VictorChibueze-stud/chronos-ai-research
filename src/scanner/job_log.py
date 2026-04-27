@@ -20,6 +20,7 @@ def write_job_log(
     failure_count: int,
     status: str,
     error_message: str | None,
+    universe_name: str | None = None,
 ) -> None:
     """Insert one ScanJobLog row and commit."""
     db.add(
@@ -33,6 +34,7 @@ def write_job_log(
             failure_count=failure_count,
             status=status,
             error_message=error_message,
+            universe_name=universe_name,
         )
     )
     db.commit()

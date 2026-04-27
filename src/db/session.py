@@ -24,6 +24,21 @@ def _create_engine(url: str) -> Engine:
     kwargs: dict = {"pool_pre_ping": True}
     if url.lower().startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False}
+    else:
+        # Bound the pool and recycle connections so a thread that leaks a
+        # session (e.g. daemon killed mid-refresh) cannot permanently hold a
+        # connection in "idle in transaction" state beyond pool_recycle.
+        #   pool_size       — baseline pooled connections per process
+        #   max_overflow    — extra connections allowed under burst
+        #   pool_timeout    — seconds to wait for a free connection
+        #   pool_recycle    — recycle any connection older than 30 minutes,
+        #                     auto-evicting stuck idle-in-transaction ones
+        kwargs.update(
+            pool_size=10,
+            max_overflow=5,
+            pool_timeout=30,
+            pool_recycle=1800,
+        )
     return create_engine(url, **kwargs)
 
 

@@ -12,6 +12,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from src.api.routers import analysis, candles, execution, global_structure, integrations, overrides, setups, symbol_params, system, trend_visual
 from src.api.routers import universe_ranking as universe_ranking_router
@@ -473,6 +474,90 @@ def apply_scan_schedule_from_db(db: Session) -> dict[str, Any]:
     }
 
 
+async def _run_entry_signal_check() -> None:
+    """Lightweight entry-signal check.
+
+    Runs every hour per universe, independently of the 4-hour
+    structural refresh. Only checks EMA crossovers on the entry
+    timeframe — does NOT recompute global structure, walker, or
+    market state.
+    """
+    from src.execution.paper_engine import run_paper_engine
+
+    for universe_name in ("multi_asset", "synthetic", "crypto"):
+        db = SessionLocal()
+        try:
+            result = run_paper_engine(db, universe=universe_name)
+            new_trades = result.get("new_trades_opened", 0)
+            if new_trades > 0:
+                logger.info(
+                    "Entry check %s: %d new trades opened",
+                    universe_name, new_trades,
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "Entry signal check failed %s: %s",
+                universe_name, e,
+            )
+        finally:
+            db.close()
+
+
+async def _run_capacity_enforcer() -> None:
+    """
+    Hourly safety net: evict any excess rows
+    per universe and remove score=0.0 rows
+    that have been in the DB more than 2 hours.
+    """
+    from src.api.routers.setups import (
+        _evict_to_capacity,
+        _infer_universe,
+    )
+
+    db = SessionLocal()
+    try:
+        us_rows = (
+            db.query(UniverseSettings)
+            .filter(UniverseSettings.is_active == True)  # noqa: E712
+            .all()
+        )
+        for us in us_rows:
+            _evict_to_capacity(
+                db,
+                capacity=us.capacity,
+                universe=us.universe_name,
+            )
+
+        _ = _infer_universe
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+        stale_zero = (
+            db.query(MonitoredSetup)
+            .filter(
+                MonitoredSetup.trend_score == 0.0,
+                MonitoredSetup.last_checked_at < cutoff,
+            )
+            .all()
+        )
+        for row in stale_zero:
+            logger.info(
+                "Capacity enforcer: removing stale zero-score row %s "
+                "(last_checked=%s)",
+                row.symbol,
+                row.last_checked_at,
+            )
+            db.delete(row)
+        if stale_zero:
+            db.commit()
+            logger.info(
+                "Capacity enforcer: removed %d stale zero-score rows",
+                len(stale_zero),
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Capacity enforcer failed: %s", e)
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global _app_scheduler
@@ -504,6 +589,20 @@ async def lifespan(_: FastAPI):
         minutes=15,
         id="candle_cache_refresh_15m",
         misfire_grace_time=60,
+    )
+    scheduler.add_job(
+        _run_capacity_enforcer,
+        "interval",
+        hours=1,
+        id="capacity_enforcer_1h",
+        misfire_grace_time=120,
+    )
+    scheduler.add_job(
+        _run_entry_signal_check,
+        "interval",
+        hours=1,
+        id="entry_signal_check_1h",
+        misfire_grace_time=120,
     )
     register_fundamentals_jobs(scheduler)
     scheduler.start()
@@ -548,6 +647,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Gzip responses ≥1 KB. Candle payloads and setup lists are the
+# main beneficiaries — they compress to ~10-20% of raw JSON size.
+# compresslevel=6 is the sweet spot between ratio and CPU cost.
+app.add_middleware(
+    GZipMiddleware,
+    minimum_size=1000,
+    compresslevel=6,
 )
 
 app.include_router(system.router)

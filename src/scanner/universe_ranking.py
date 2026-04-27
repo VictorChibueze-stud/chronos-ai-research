@@ -1007,6 +1007,39 @@ def run_universe_ranking(
                 universe=universe,
             )
 
+            # Promotions / evictions have landed; drop the cached
+            # /api/setups/universe payload so the next frontend load
+            # rebuilds with fresh ranks and scores.
+            try:
+                from src.api.routers.setups import invalidate_universe_cache
+
+                invalidate_universe_cache()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "Failed to invalidate universe cache: %s", e
+                )
+
+            # Analysis cache invalidation: the promoted symbols have just had
+            # their structure rewritten (new rank, potentially new global
+            # structure/walker). Any cached analysis response for these
+            # symbols is stale. Clear per-symbol so the next GET recomputes.
+            try:
+                from src.api.routers.analysis import (
+                    on_structure_updated,
+                )
+
+                inv_db = SessionLocal()
+                try:
+                    for sym in promoted_symbols:
+                        on_structure_updated(sym, inv_db)
+                finally:
+                    inv_db.close()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "Analysis cache invalidation after ranking failed: %s",
+                    e,
+                )
+
             duration_sec = time.perf_counter() - job_started
             write_job_log(
                 db,
@@ -1019,21 +1052,74 @@ def run_universe_ranking(
                 failure_count=failure_count,
                 status="completed",
                 error_message=None,
+                universe_name=universe,
             )
+
+            # The ranking row above is logged as "completed" before the
+            # full-chain analysis has even started. Wrap the chain thread
+            # so its own success / failure lands in ScanJobLog as a
+            # separate row — otherwise a chain crash would be silent.
+            analysis_job_start = datetime.now(timezone.utc)
+            analysis_symbols = list(top_50_symbols)
+            analysis_universe = universe
+
+            def _analysis_chain_wrapper(
+                symbols: list[str] = analysis_symbols,
+                started_at: datetime = analysis_job_start,
+                universe_name: str | None = analysis_universe,
+                _force: bool = force,
+            ) -> None:
+                chain_error: str | None = None
+                try:
+                    _run_full_analysis_chain(
+                        symbols,
+                        depth="full_chain",
+                        force=_force,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    chain_error = str(e)[:2000]
+                    logger.warning(
+                        "Post-ranking analysis chain failed for %s: %s",
+                        universe_name, e,
+                    )
+                finally:
+                    try:
+                        chain_db = SessionLocal()
+                        try:
+                            now_utc = datetime.now(timezone.utc)
+                            write_job_log(
+                                chain_db,
+                                job_type="universe_analysis_chain",
+                                started_at=started_at,
+                                completed_at=now_utc,
+                                duration_seconds=(
+                                    now_utc - started_at
+                                ).total_seconds(),
+                                total_symbols=len(symbols),
+                                success_count=(
+                                    0 if chain_error else len(symbols)
+                                ),
+                                failure_count=0,
+                                status=(
+                                    "failed" if chain_error else "completed"
+                                ),
+                                error_message=chain_error,
+                                universe_name=universe_name,
+                            )
+                        finally:
+                            chain_db.close()
+                    except Exception:
+                        pass
+
             threading.Thread(
-                target=_run_full_analysis_chain,
-                args=(top_50_symbols,),
-                kwargs={"depth": "full_chain", "force": force},
+                target=_analysis_chain_wrapper,
                 daemon=True,
             ).start()
         finally:
             db.close()
 
         with _ranking_lock:
-            _ranking_status["in_progress"] = False
             _ranking_status["completed_at"] = datetime.now(timezone.utc).isoformat()
-            _ranking_status["current_symbol"] = None
-            _ranking_status["estimated_seconds_remaining"] = None
 
     except Exception as exc:
         logger.exception("run_universe_ranking failed: %s", exc)
@@ -1052,14 +1138,22 @@ def run_universe_ranking(
                     failure_count=failure_count,
                     status="failed",
                     error_message=str(exc)[:2000],
+                    universe_name=universe,
                 )
             finally:
                 db.close()
         except Exception:
             pass
         with _ranking_lock:
-            _ranking_status["in_progress"] = False
             _ranking_status["last_error"] = str(exc)
             _ranking_status["completed_at"] = datetime.now(timezone.utc).isoformat()
+    finally:
+        # Always clear in_progress / current_symbol / ETA, even on a
+        # BaseException. Previously these lived in both the success and
+        # except branches, so a crash between branches — or a
+        # KeyboardInterrupt / SystemExit — could leave in_progress stuck
+        # True forever, silently disabling all future ranking jobs.
+        with _ranking_lock:
+            _ranking_status["in_progress"] = False
             _ranking_status["current_symbol"] = None
             _ranking_status["estimated_seconds_remaining"] = None

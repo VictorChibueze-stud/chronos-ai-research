@@ -38,7 +38,7 @@ export function SidebarNav({ items = DEFAULT_NAV_ITEMS }: SidebarNavProps) {
                   "block border-l-2 px-3 py-2 text-xs uppercase tracking-[0.14em] transition-colors",
                   isActive
                     ? "border-l-[#F5A623] text-[#F5A623]"
-                    : "border-l-transparent text-[#4A4D58]",
+                    : "border-l-transparent text-[var(--text-muted)]",
                 ].join(" ")}
                 aria-current={isActive ? "page" : undefined}
               >

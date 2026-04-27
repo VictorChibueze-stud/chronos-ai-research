@@ -148,7 +148,7 @@ export function CommandPalette() {
         <div className="border-b border-white/10 px-5 py-4">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-[10px] tracking-[0.18em] text-brand-amber">COMMAND PALETTE</span>
-            <span className="text-[10px] tracking-[0.12em] text-[#4A4D58]">PRESS ESC TO CLOSE</span>
+            <span className="text-[10px] tracking-[0.12em] text-[var(--text-muted)]">PRESS ESC TO CLOSE</span>
           </div>
 
           <input
@@ -168,14 +168,14 @@ export function CommandPalette() {
               }
             }}
             placeholder="Jump to symbol..."
-            className="w-full border-none bg-transparent px-0 py-1 font-mono text-[24px] font-semibold tracking-[0.04em] text-[#E8E8EC] outline-none placeholder:text-[#343844]"
+            className="w-full border-none bg-transparent px-0 py-1 font-mono text-[24px] font-semibold tracking-[0.04em] text-[var(--text-primary)] outline-none placeholder:text-[#343844]"
           />
         </div>
 
         <div className="max-h-[420px] overflow-y-auto p-2">
           {filteredSymbols.length === 0 ? (
             <div className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center">
-              <div className="text-[10px] tracking-[0.14em] text-[#4A4D58]">NO MATCHING SYMBOLS</div>
+              <div className="text-[10px] tracking-[0.14em] text-[var(--text-muted)]">NO MATCHING SYMBOLS</div>
             </div>
           ) : (
             filteredSymbols.map((symbol, index) => {

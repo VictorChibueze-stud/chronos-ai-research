@@ -5,22 +5,108 @@
 @import "tailwindcss";
 
 :root {
-  --bg-base: #0B0D11;
-  --bg-surface: #131722;
+  /* ============ FONTS ============ */
+  --font-sans: "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+
+  /* ============ BACKGROUNDS ============ */
+  /* Dark mode values — Sprint 5 will add
+     light mode overrides via [data-theme="light"] */
+  --bg-base:     #0B0D11;
+  --bg-surface:  #131722;
   --bg-elevated: #1E222D;
-  --bg-hover: #252A36;
-  --border-subtle: #1E222D;
+  --bg-hover:    #252A36;
+  --bg-input:    #2A2E39;
+
+  /* ============ BORDERS ============ */
+  --border-subtle:  #1E222D;
   --border-default: #2A2E39;
-  --border-strong: #363A45;
-  --text-primary: #D1D4DC;
-  --text-secondary: #787B86;
-  --text-dim: #434651;
-  --bull: #26A69A;
-  --bear: #EF5350;
-  --amber: #F5A623;
-  --amber-dim: rgba(245,166,35,0.15);
-  --blue: #2962FF;
-  --purple: #7B1FA2;
+  --border-strong:  #363A45;
+
+  /* ============ TEXT ============ */
+  /* Contrast ratios on --bg-base (#0B0D11):
+     --text-primary   #D1D4DC  10.1:1 AAA
+     --text-secondary #9B9EA8   5.8:1 AA
+     --text-dim       #787B86   4.6:1 AA (floor)
+     --text-muted     #4A4D58   2.6:1 (use only
+                      for decorative/non-essential)
+  */
+  --text-primary:   #D1D4DC;
+  --text-secondary: #9B9EA8;
+  --text-dim:       #787B86;
+  --text-muted:     #4A4D58;
+
+  /* ============ SEMANTIC ============ */
+  --bull:       #26A69A;
+  --bull-dim:   rgba(38, 166, 154, 0.15);
+  --bear:       #EF5350;
+  --bear-dim:   rgba(239, 83, 80, 0.15);
+  --amber:      #F5A623;
+  --amber-dim:  rgba(245, 166, 35, 0.12);
+  --amber-mid:  rgba(245, 166, 35, 0.30);
+  --blue:       #2962FF;
+  --blue-dim:   rgba(41, 98, 255, 0.15);
+  --purple:     #7B61FF;
+  --purple-dim: rgba(123, 97, 255, 0.15);
+
+  /* ============ FSM STATE COLORS ============ */
+  /* Heat progression: cold → hot → live */
+  --state-waiting:    #4A4D58;  /* dim grey */
+  --state-scanning:   #607D8B;  /* blue grey */
+  --state-depth:      #2962FF;  /* blue */
+  --state-candidate:  #F5A623;  /* amber */
+  --state-choch:      #FF9800;  /* orange */
+  --state-entry:      #26A69A;  /* teal */
+  --state-open:       #4DD0E1;  /* electric cyan */
+  --state-confirmed:  #00C853;  /* bright green */
+
+  /* ============ SCORE THRESHOLDS ============ */
+  --score-low:    #4A4D58;  /* < 50: dim */
+  --score-mid:    #9B9EA8;  /* 50-74: normal */
+  --score-high:   #F5A623;  /* 75+: amber */
+}
+
+/* ============ LIGHT MODE OVERRIDES ============ */
+[data-theme="light"] {
+  --bg-base:     #F4F5F7;
+  --bg-surface:  #FFFFFF;
+  --bg-elevated: #F0F1F4;
+  --bg-hover:    #E8E9ED;
+  --bg-input:    #E4E5EA;
+
+  --border-subtle:  #E4E5EA;
+  --border-default: #D0D2DA;
+  --border-strong:  #B8BAC4;
+
+  --text-primary:   #1A1D24;
+  --text-secondary: #3D4154;
+  --text-dim:       #5C6070;
+  --text-muted:     #8B8F9E;
+
+  --bull:       #1A8A82;
+  --bull-dim:   rgba(26, 138, 130, 0.12);
+  --bear:       #C62828;
+  --bear-dim:   rgba(198, 40, 40, 0.10);
+  --amber:      #D4891A;
+  --amber-dim:  rgba(212, 137, 26, 0.10);
+  --amber-mid:  rgba(212, 137, 26, 0.25);
+  --blue:       #1A47CC;
+  --blue-dim:   rgba(26, 71, 204, 0.12);
+  --purple:     #5B3FD4;
+  --purple-dim: rgba(91, 63, 212, 0.12);
+
+  --state-waiting:    #8B8F9E;
+  --state-scanning:   #4A6477;
+  --state-depth:      #1A47CC;
+  --state-candidate:  #D4891A;
+  --state-choch:      #C85A00;
+  --state-entry:      #1A8A82;
+  --state-open:       #0077AA;
+  --state-confirmed:  #1B7A3E;
+
+  --score-low:    #8B8F9E;
+  --score-mid:    #5C6070;
+  --score-high:   #D4891A;
 }
 
 html {
@@ -30,13 +116,19 @@ html {
 html, body {
   background: var(--bg-base);
   color: var(--text-primary);
-  font-family: "IBM Plex Mono", monospace;
+  font-family: var(--font-sans);
+}
+
+/* Monospace class for data/numbers */
+.font-data {
+  font-family: var(--font-mono);
 }
 
 body {
   margin: 0;
 }
 
+/* Scrollbar styling */
 *::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -162,11 +254,11 @@ body {
 .skeleton-bar {
   background: linear-gradient(
     90deg,
-    #1e222d 0%,
-    #2a2e39 40%,
-    #363a45 50%,
-    #2a2e39 60%,
-    #1e222d 100%
+    var(--bg-elevated) 0%,
+    var(--border-default) 40%,
+    var(--border-strong) 50%,
+    var(--border-default) 60%,
+    var(--bg-elevated) 100%
   );
   background-size: 200% 100%;
   animation: skeleton-shimmer 1.8s ease-in-out infinite;
@@ -179,4 +271,12 @@ body {
 
 .signal-row:hover {
   background: var(--bg-hover);
+}
+
+input::placeholder {
+  color: var(--text-muted);
+}
+
+[data-theme="light"] input::placeholder {
+  color: var(--text-muted);
 }

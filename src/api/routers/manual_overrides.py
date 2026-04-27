@@ -4,7 +4,8 @@ Allows users to set, update, and reset CHoCH zone overrides for any monitored sy
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,6 +13,9 @@ from sqlalchemy.orm import Session
 
 from src.db.models import ManualStructureOverride
 from src.db.session import get_db
+from src.analysis.recompute_orchestrator import trigger_recompute_async
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/manual-structure-overrides",
@@ -26,6 +30,33 @@ VALID_OVERRIDE_TYPES = {
     "candidate_choch",
     "candidate_ichoch",
 }
+
+VALID_RECOMPUTE_LAYERS = {"global", "prime", "walker", "candidate"}
+
+
+def _normalize_recompute_layers(payload: dict | None) -> list[str] | None:
+    raw_layers = payload.get("layers") if isinstance(payload, dict) else None
+    if raw_layers is None:
+        return None
+    if not isinstance(raw_layers, list):
+        raise HTTPException(status_code=400, detail="layers must be a list of strings")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_layers:
+        layer = str(item or "").strip().lower()
+        if not layer:
+            continue
+        if layer not in VALID_RECOMPUTE_LAYERS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid recompute layer: {layer}. Valid: {sorted(VALID_RECOMPUTE_LAYERS)}",
+            )
+        if layer in seen:
+            continue
+        seen.add(layer)
+        normalized.append(layer)
+    return normalized or None
 
 
 def _serialize_override(o: ManualStructureOverride) -> dict:
@@ -48,6 +79,8 @@ def _serialize_override(o: ManualStructureOverride) -> dict:
         "notes": o.notes,
         "created_at": o.created_at.isoformat(),
         "updated_at": o.updated_at.isoformat(),
+        "expires_at": o.expires_at.isoformat()
+        if o.expires_at else None,
         "reset_at": o.reset_at.isoformat()
         if o.reset_at else None,
     }
@@ -148,13 +181,29 @@ def set_override(
     override.is_active = True
     override.reset_at = None
     override.updated_at = now
+    override.expires_at = _parse_ts(payload.get("expires_at")) or (now + timedelta(days=30))
 
     db.commit()
     db.refresh(override)
 
+    layers: list[str] | None
+    if otype in {"trend_bounds", "global_choch"}:
+        layers = None
+    elif otype == "ichoch":
+        layers = ["prime", "walker", "candidate"]
+    elif otype == "depth_choch":
+        layers = ["walker", "candidate"]
+    elif otype in {"candidate_choch", "candidate_ichoch"}:
+        layers = ["candidate"]
+    else:
+        layers = None
+
+    trigger_recompute_async(sym, layers=layers)
+
     return {
         "status": "saved",
         "override": _serialize_override(override),
+        "recompute_triggered": True,
     }
 
 
@@ -186,12 +235,14 @@ def reset_override(
         row.reset_at = now
 
     db.commit()
+    trigger_recompute_async(sym, layers=None)
 
     return {
         "status": "reset",
         "symbol": sym,
         "override_type": override_type,
         "rows_deactivated": len(rows),
+        "recompute_triggered": True,
     }
 
 
@@ -218,9 +269,32 @@ def reset_all_overrides(
         row.reset_at = now
 
     db.commit()
+    trigger_recompute_async(sym, layers=None)
 
     return {
         "status": "reset_all",
         "symbol": sym,
         "rows_deactivated": len(rows),
+        "recompute_triggered": True,
+    }
+
+
+@router.post("/{symbol}/recompute")
+def recompute_overrides(
+    symbol: str,
+    payload: dict | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Trigger a manual recompute for a symbol using the current active overrides."""
+    sym = symbol.strip().upper()
+    layers = _normalize_recompute_layers(payload)
+    effective_layers = layers or ["global", "prime", "walker", "candidate"]
+
+    trigger_recompute_async(sym, layers=layers)
+
+    return {
+        "status": "recompute_triggered",
+        "symbol": sym,
+        "layers": effective_layers,
+        "recompute_triggered": True,
     }

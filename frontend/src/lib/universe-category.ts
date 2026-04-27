@@ -53,5 +53,5 @@ export const MARKET_DIST_READINESS_COLORS: Record<ReadinessStackKey, string> = {
   FULL: "#26A69A",
   PARTIAL: "#F5A623",
   ERROR: "#EF5350",
-  UNSCANNED: "#434651",
+  UNSCANNED: "var(--text-muted)",
 };

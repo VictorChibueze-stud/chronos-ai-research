@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import type { CSSProperties, ReactNode } from "react";
 
@@ -45,7 +45,7 @@ export function LiveStatusRow({
   rightSlot?: ReactNode;
   className?: string;
 }) {
-  const liveColor = variant === "idle" ? "#434651" : "#4CAF7D";
+  const liveColor = variant === "idle" ? "var(--text-dim)" : "#4CAF7D";
   const primaryPulse = variant === "live";
   const secondaryVisible = variant !== "idle" && showSecondaryBusyDot;
 
@@ -56,7 +56,7 @@ export function LiveStatusRow({
         <span className="inline-flex min-h-[6px] min-w-[6px] shrink-0 items-center justify-center" aria-hidden>
           {secondaryVisible ? <PulseDot color="#F5A623" pulse size={6} /> : null}
         </span>
-        <span style={{ ...mono, color: "#4A4D58" }}>{label}</span>
+        <span style={{ ...mono, color: "var(--text-muted)" }}>{label}</span>
       </div>
       {rightSlot != null ? <div className="flex items-center gap-3">{rightSlot}</div> : null}
     </div>
@@ -71,7 +71,7 @@ export function LiveStatusMeta({
   dim?: boolean;
 }) {
   return (
-    <span style={{ ...mono, color: dim ? "#2A2D36" : "#4A4D58" }}>
+    <span style={{ ...mono, color: dim ? "#2A2D36" : "var(--text-muted)" }}>
       {children}
     </span>
   );

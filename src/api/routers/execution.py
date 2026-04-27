@@ -226,6 +226,8 @@ def list_paper_accounts(
             "entry_timeframe": a.entry_timeframe,
             "min_market_state": a.min_market_state,
             "tp_mode": a.tp_mode,
+            "entry_lookback_candles": a.entry_lookback_candles,
+            "entry_check_interval_hours": a.entry_check_interval_hours,
             "time_exit_days": a.time_exit_days,
             "is_active": a.is_active,
             "is_paused_drawdown": a.is_paused_drawdown,
@@ -250,7 +252,10 @@ def update_paper_account_settings(
         "max_concurrent_positions", "scale_by_score",
         "entry_ema_fast", "entry_ema_slow",
         "entry_timeframe", "min_market_state",
-        "tp_mode", "time_exit_days",
+        "tp_mode",
+        "entry_lookback_candles",
+        "entry_check_interval_hours",
+        "time_exit_days",
         "is_active", "is_paused_drawdown",
     }
     for key, value in payload.items():

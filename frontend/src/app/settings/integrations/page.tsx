@@ -47,9 +47,9 @@ function formatTimestamp(value: string | null | undefined): string {
 }
 
 const inputStyle: CSSProperties = {
-  background: "#0B0D11",
-  border: "1px solid #1E222D",
-  color: "#D1D4DC",
+  background: "var(--bg-input)",
+  border: "1px solid var(--border-default)",
+  color: "var(--text-primary)",
   padding: "8px 10px",
   fontSize: 10,
   fontFamily: MONO,
@@ -61,10 +61,10 @@ const inputStyle: CSSProperties = {
 const credentialInputStyle: CSSProperties = {
   flex: 1,
   minWidth: 0,
-  background: "#1E222D",
-  border: "1px solid #363A45",
+  background: "var(--bg-elevated)",
+  border: "1px solid var(--border-default)",
   borderRadius: 0,
-  color: "#FFFFFF",
+  color: "var(--text-primary)",
   padding: "8px 10px",
   fontSize: 11,
   fontFamily: MONO,
@@ -77,7 +77,7 @@ const sectionLabelStyle: CSSProperties = {
   fontSize: 9,
   textTransform: "uppercase",
   letterSpacing: "0.1em",
-  color: "#787B86",
+  color: "var(--text-dim)",
   marginBottom: 8,
 };
 
@@ -99,7 +99,7 @@ function ExecutionBadge({
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-      <span style={{ fontFamily: MONO, fontSize: 8, letterSpacing: "0.12em", color: "#787B86" }}>{label}</span>
+      <span style={{ fontFamily: MONO, fontSize: 8, letterSpacing: "0.12em", color: "var(--text-dim)" }}>{label}</span>
       <span
         style={{
           fontFamily: MONO,
@@ -110,7 +110,7 @@ function ExecutionBadge({
           border: `1px solid ${borderColor}`,
           borderRadius: 0,
           color: valueColor,
-          background: "#0E1014",
+          background: "var(--bg-base)",
           display: "inline-block",
           width: "fit-content",
           maxWidth: "100%",
@@ -137,7 +137,7 @@ function CredentialFieldRow({
 }) {
   return (
     <div style={{ display: "grid", gap: 4 }}>
-      <span style={{ fontFamily: MONO, fontSize: 9, textTransform: "uppercase", letterSpacing: "0.1em", color: "#787B86" }}>
+      <span style={{ fontFamily: MONO, fontSize: 9, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-dim)" }}>
         {fieldLabel}
       </span>
       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -160,10 +160,10 @@ function CredentialFieldRow({
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              border: "1px solid #363A45",
+              border: "1px solid var(--border-strong)",
               borderRadius: 0,
-              background: "#1E222D",
-              color: "#787B86",
+              background: "var(--bg-elevated)",
+              color: "var(--text-dim)",
               cursor: "help",
               padding: 0,
             }}
@@ -198,10 +198,10 @@ function BrokerConnectionCard({
   const showToken = broker === "deriv";
 
   return (
-    <section style={{ border: "1px solid #1C1E24", background: "#111318", padding: 14, display: "flex", flexDirection: "column", gap: 0 }}>
+    <section style={{ border: "1px solid var(--border-subtle)", background: "var(--bg-surface)", padding: 14, display: "flex", flexDirection: "column", gap: 0 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: "#D1D4DC", fontFamily: MONO, letterSpacing: "0.04em" }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text-primary)", fontFamily: MONO, letterSpacing: "0.04em" }}>
             {BROKER_LABELS[broker]}
           </span>
           <span
@@ -210,18 +210,18 @@ function BrokerConnectionCard({
               height: 8,
               borderRadius: "50%",
               flexShrink: 0,
-              background: connected ? "#26A69A" : "#434651",
+              background: connected ? "#26A69A" : "var(--text-muted)",
               boxShadow: connected ? "0 0 6px rgba(38,166,154,0.5)" : "none",
             }}
             title={connected ? "Connected" : "Not connected"}
           />
         </div>
-        <span style={{ fontSize: 9, color: "#4A4D58", fontFamily: MONO, letterSpacing: "0.06em", textAlign: "right" }}>
+        <span style={{ fontSize: 9, color: "var(--text-muted)", fontFamily: MONO, letterSpacing: "0.06em", textAlign: "right" }}>
           {formatTimestamp(lastSync)}
         </span>
       </div>
 
-      <div style={{ height: 1, background: "#2A2E39", marginBottom: 12 }} />
+      <div style={{ height: 1, background: "var(--border-default)", marginBottom: 12 }} />
 
       <div style={sectionLabelStyle}>CREDENTIALS</div>
       <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
@@ -252,27 +252,27 @@ function BrokerConnectionCard({
         ) : null}
       </div>
 
-      <div style={{ height: 1, background: "#2A2E39", marginBottom: 12 }} />
+      <div style={{ height: 1, background: "var(--border-default)", marginBottom: 12 }} />
 
       <div style={sectionLabelStyle}>STATUS</div>
       <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
         <div style={{ fontFamily: MONO, fontSize: 11, color: connected ? "#26A69A" : "#EF5350", fontWeight: 600, letterSpacing: "0.08em" }}>
           {connected ? "CONNECTED" : "DISCONNECTED"}
         </div>
-        <div style={{ fontFamily: MONO, fontSize: 9, color: "#787B86" }}>
+        <div style={{ fontFamily: MONO, fontSize: 9, color: "var(--text-dim)" }}>
           {/* API exposes last_sync only — no separate "last successful connection" field */}
           Last sync: {formatTimestamp(lastSync)}
         </div>
         {status?.message ? (
-          <div style={{ fontFamily: MONO, fontSize: 9, color: "#787B86", lineHeight: 1.45 }}>{status.message}</div>
+          <div style={{ fontFamily: MONO, fontSize: 9, color: "var(--text-dim)", lineHeight: 1.45 }}>{status.message}</div>
         ) : null}
         {status?.account?.balance != null ? (
-          <div style={{ fontFamily: MONO, fontSize: 9, color: "#4A4D58" }}>
+          <div style={{ fontFamily: MONO, fontSize: 9, color: "var(--text-muted)" }}>
             Balance: {status.account.balance} {status.account.currency ?? ""}
           </div>
         ) : null}
         {status?.account?.challenge_status ? (
-          <div style={{ fontFamily: MONO, fontSize: 9, color: "#4A4D58" }}>Challenge: {status.account.challenge_status}</div>
+          <div style={{ fontFamily: MONO, fontSize: 9, color: "var(--text-muted)" }}>Challenge: {status.account.challenge_status}</div>
         ) : null}
       </div>
 
@@ -477,9 +477,9 @@ export default function IntegrationsSettingsPage() {
   const brokers: BrokerKey[] = ["binance", "deriv", "ftmo"];
 
   const btnGhost: CSSProperties = {
-    border: "1px solid #1C1E24",
+    border: "1px solid var(--border-subtle)",
     background: "transparent",
-    color: "#787B86",
+    color: "var(--text-dim)",
     padding: "6px 10px",
     fontSize: 10,
     letterSpacing: "0.08em",
@@ -507,7 +507,7 @@ export default function IntegrationsSettingsPage() {
   }
 
   return (
-    <div style={{ padding: 16, background: "#0D0F14", minHeight: "100%", color: "#D1D4DC", fontFamily: MONO }}>
+    <div style={{ padding: 16, background: "var(--bg-base)", minHeight: "100%", color: "var(--text-primary)", fontFamily: MONO }}>
       <style>{`
         .integrations-test-connection {
           width: 100%;
@@ -525,17 +525,17 @@ export default function IntegrationsSettingsPage() {
         }
         .integrations-test-connection:hover:not(:disabled) {
           background: #F5A623;
-          color: #0D0F14;
+          color: var(--bg-base);
         }
         .integrations-test-connection:disabled {
           opacity: 0.5;
           cursor: not-allowed;
         }
       `}</style>
-      <div style={{ border: "1px solid #1C1E24", background: "#111318", padding: "10px 12px", marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ border: "1px solid var(--border-subtle)", background: "var(--bg-surface)", padding: "10px 12px", marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "grid", gap: 4 }}>
-          <span style={{ fontSize: 10, color: "#787B86", letterSpacing: "0.12em" }}>SETTINGS / INTEGRATIONS</span>
-          <span style={{ fontSize: 12, color: "#D1D4DC", letterSpacing: "0.04em" }}>
+          <span style={{ fontSize: 10, color: "var(--text-dim)", letterSpacing: "0.12em" }}>SETTINGS / INTEGRATIONS</span>
+          <span style={{ fontSize: 12, color: "var(--text-primary)", letterSpacing: "0.04em" }}>
             Configure broker API credentials, execution paper trading, and connectivity tests.
           </span>
         </div>
@@ -547,20 +547,20 @@ export default function IntegrationsSettingsPage() {
       </div>
 
       {error ? (
-        <div style={{ border: "1px solid #1C1E24", background: "#111318", color: "#EF5350", padding: 10, fontSize: 10, marginBottom: 12 }}>
+        <div style={{ border: "1px solid var(--border-subtle)", background: "var(--bg-surface)", color: "#EF5350", padding: 10, fontSize: 10, marginBottom: 12 }}>
           {error}
         </div>
       ) : null}
 
       {executionError ? (
-        <div style={{ border: "1px solid #1C1E24", background: "#111318", color: "#F5A623", padding: 10, fontSize: 10, marginBottom: 12 }}>
+        <div style={{ border: "1px solid var(--border-subtle)", background: "var(--bg-surface)", color: "#F5A623", padding: 10, fontSize: 10, marginBottom: 12 }}>
           {executionError}
         </div>
       ) : null}
 
       {/* Zone 1 — EXECUTION STATUS */}
-      <section style={{ border: "1px solid #1C1E24", background: "#111318", padding: 14, marginBottom: 12 }}>
-        <div style={{ fontSize: 10, color: "#787B86", letterSpacing: "0.12em", marginBottom: 12 }}>EXECUTION STATUS</div>
+      <section style={{ border: "1px solid var(--border-subtle)", background: "var(--bg-surface)", padding: 14, marginBottom: 12 }}>
+        <div style={{ fontSize: 10, color: "var(--text-dim)", letterSpacing: "0.12em", marginBottom: 12 }}>EXECUTION STATUS</div>
 
         {executionStatus ? (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-end", marginBottom: 10 }}>
@@ -579,22 +579,22 @@ export default function IntegrationsSettingsPage() {
             <ExecutionBadge label="PROVIDER" value={providerUpper} valueColor="#F5A623" borderColor="#F5A623" />
           </div>
         ) : !executionError ? (
-          <div style={{ fontFamily: MONO, fontSize: 9, color: "#4A4D58", marginBottom: 10 }}>Loading execution status…</div>
+          <div style={{ fontFamily: MONO, fontSize: 9, color: "var(--text-muted)", marginBottom: 10 }}>Loading execution status…</div>
         ) : (
-          <div style={{ fontFamily: MONO, fontSize: 9, color: "#4A4D58", marginBottom: 10 }}>—</div>
+          <div style={{ fontFamily: MONO, fontSize: 9, color: "var(--text-muted)", marginBottom: 10 }}>—</div>
         )}
 
-        <p style={{ margin: "0 0 14px", fontFamily: MONO, fontSize: 9, color: "#787B86", lineHeight: 1.5 }}>
+        <p style={{ margin: "0 0 14px", fontFamily: MONO, fontSize: 9, color: "var(--text-dim)", lineHeight: 1.5 }}>
           Edit .env and restart to change execution settings
         </p>
 
-        <div style={{ fontFamily: MONO, fontSize: 9, color: "#787B86", letterSpacing: "0.1em", marginBottom: 8 }}>RECENT ORDERS</div>
+        <div style={{ fontFamily: MONO, fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.1em", marginBottom: 8 }}>RECENT ORDERS</div>
 
         {executionOrders.length === 0 ? (
           <div
             style={{
-              border: "1px solid #1C1E24",
-              background: "#0B0D11",
+              border: "1px solid var(--border-subtle)",
+              background: "var(--bg-base)",
               padding: 28,
               display: "flex",
               flexDirection: "column",
@@ -603,17 +603,17 @@ export default function IntegrationsSettingsPage() {
               textAlign: "center",
             }}
           >
-            <Inbox size={28} strokeWidth={1.25} color="#4A4D58" aria-hidden />
-            <span style={{ fontFamily: MONO, fontSize: 11, color: "#787B86" }}>No orders yet</span>
-            <span style={{ fontFamily: MONO, fontSize: 9, color: "#4A4D58", maxWidth: 280, lineHeight: 1.45 }}>
+            <Inbox size={28} strokeWidth={1.25} color="var(--text-muted)" aria-hidden />
+            <span style={{ fontFamily: MONO, fontSize: 11, color: "var(--text-dim)" }}>No orders yet</span>
+            <span style={{ fontFamily: MONO, fontSize: 9, color: "var(--text-muted)", maxWidth: 280, lineHeight: 1.45 }}>
               Orders will appear here once execution is enabled
             </span>
           </div>
         ) : (
-          <div style={{ overflowX: "auto", border: "1px solid #1C1E24", background: "#0B0D11" }}>
+          <div style={{ overflowX: "auto", border: "1px solid var(--border-subtle)", background: "var(--bg-base)" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: MONO, fontSize: 10 }}>
               <thead>
-                <tr style={{ color: "#787B86", textAlign: "left" }}>
+                <tr style={{ color: "var(--text-dim)", textAlign: "left" }}>
                   <th style={{ padding: "8px 10px", fontWeight: 400 }}>TIMESTAMP</th>
                   <th style={{ padding: "8px 10px", fontWeight: 400 }}>SYMBOL</th>
                   <th style={{ padding: "8px 10px", fontWeight: 400 }}>SIDE</th>
@@ -638,8 +638,8 @@ export default function IntegrationsSettingsPage() {
                       tabIndex={0}
                       style={{
                         cursor: "pointer",
-                        background: selected ? "#1C1E24" : stripe,
-                        color: "#D1D4DC",
+                        background: selected ? "var(--border-subtle)" : stripe,
+                        color: "var(--text-primary)",
                       }}
                     >
                       <td style={{ padding: "8px 10px" }}>{formatTimestamp(row.created_at)}</td>
@@ -657,25 +657,25 @@ export default function IntegrationsSettingsPage() {
         {executionOrders.length > 0 ? (
           <div style={{ marginTop: 10 }}>
             {selectedOrderId != null ? (
-              <div style={{ border: "1px solid #1C1E24", background: "#0B0D11", padding: 10 }}>
-                <div style={{ fontFamily: MONO, fontSize: 9, color: "#787B86", marginBottom: 6 }}>
+              <div style={{ border: "1px solid var(--border-subtle)", background: "var(--bg-base)", padding: 10 }}>
+                <div style={{ fontFamily: MONO, fontSize: 9, color: "var(--text-dim)", marginBottom: 6 }}>
                   EVENTS FOR ORDER #{selectedOrderId}
                   {eventsLoading ? " (loading…)" : ""}
                 </div>
                 {!eventsLoading && orderEvents && orderEvents.length === 0 ? (
-                  <div style={{ fontFamily: MONO, fontSize: 9, color: "#4A4D58" }}>No events.</div>
+                  <div style={{ fontFamily: MONO, fontSize: 9, color: "var(--text-muted)" }}>No events.</div>
                 ) : null}
                 {!eventsLoading && orderEvents && orderEvents.length > 0 ? (
-                  <ul style={{ margin: 0, paddingLeft: 16, fontFamily: MONO, fontSize: 9, color: "#D1D4DC" }}>
+                  <ul style={{ margin: 0, paddingLeft: 16, fontFamily: MONO, fontSize: 9, color: "var(--text-primary)" }}>
                     {orderEvents.map((ev) => (
                       <li key={ev.id} style={{ marginBottom: 6 }}>
                         <span style={{ color: "#F5A623" }}>{ev.event_type}</span>
                         {ev.message ? ` — ${ev.message}` : ""}
-                        <span style={{ color: "#4A4D58" }}> @ {formatTimestamp(ev.created_at)}</span>
+                        <span style={{ color: "var(--text-muted)" }}> @ {formatTimestamp(ev.created_at)}</span>
                         {ev.payload && Object.keys(ev.payload).length > 0 ? (
                           <details style={{ marginTop: 4 }}>
-                            <summary style={{ cursor: "pointer", color: "#787B86" }}>payload</summary>
-                            <pre style={{ margin: "4px 0 0", fontFamily: MONO, fontSize: 8, overflow: "auto", color: "#787B86" }}>
+                            <summary style={{ cursor: "pointer", color: "var(--text-dim)" }}>payload</summary>
+                            <pre style={{ margin: "4px 0 0", fontFamily: MONO, fontSize: 8, overflow: "auto", color: "var(--text-dim)" }}>
                               {JSON.stringify(ev.payload, null, 2)}
                             </pre>
                           </details>
@@ -686,14 +686,14 @@ export default function IntegrationsSettingsPage() {
                 ) : null}
               </div>
             ) : (
-              <div style={{ fontFamily: MONO, fontSize: 9, color: "#4A4D58" }}>Select a row to view events.</div>
+              <div style={{ fontFamily: MONO, fontSize: 9, color: "var(--text-muted)" }}>Select a row to view events.</div>
             )}
           </div>
         ) : null}
       </section>
 
       {/* Zone 2 — BROKER CONNECTIONS */}
-      <div style={{ fontSize: 10, color: "#787B86", letterSpacing: "0.12em", marginBottom: 10 }}>BROKER CONNECTIONS</div>
+      <div style={{ fontSize: 10, color: "var(--text-dim)", letterSpacing: "0.12em", marginBottom: 10 }}>BROKER CONNECTIONS</div>
       <div
         style={{
           display: "grid",
@@ -713,29 +713,29 @@ export default function IntegrationsSettingsPage() {
         ))}
       </div>
 
-      <details style={{ border: "1px solid #1C1E24", background: "#111318", padding: 14 }}>
+      <details style={{ border: "1px solid var(--border-subtle)", background: "var(--bg-surface)", padding: 14 }}>
         <summary style={{ fontFamily: MONO, fontSize: 10, color: "#F5A623", cursor: "pointer", letterSpacing: "0.08em" }}>
           ADVANCED — SUBMIT ORDERS
         </summary>
         <p style={{ fontFamily: MONO, fontSize: 9, color: "#EF5350", lineHeight: 1.5, margin: "10px 0" }}>
-          Warning: With <code style={{ color: "#787B86" }}>EXECUTION_ENABLED=1</code> and a valid Deriv token, requests are sent to the broker
+          Warning: With <code style={{ color: "var(--text-dim)" }}>EXECUTION_ENABLED=1</code> and a valid Deriv token, requests are sent to the broker
           (demo vs real depends on your token). Use only on accounts you intend to trade.
         </p>
 
         <div style={{ display: "grid", gap: 12, marginTop: 10 }}>
-          <div style={{ border: "1px solid #1C1E24", padding: 10, background: "#0B0D11" }}>
-            <div style={{ fontFamily: MONO, fontSize: 9, color: "#787B86", marginBottom: 8 }}>FROM SIGNAL (cached candles + bridge)</div>
+          <div style={{ border: "1px solid var(--border-subtle)", padding: 10, background: "var(--bg-base)" }}>
+            <div style={{ fontFamily: MONO, fontSize: 9, color: "var(--text-dim)", marginBottom: 8 }}>FROM SIGNAL (cached candles + bridge)</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8 }}>
               <label style={{ display: "grid", gap: 4 }}>
-                <span style={{ fontFamily: MONO, fontSize: 8, color: "#787B86" }}>SYMBOL</span>
+                <span style={{ fontFamily: MONO, fontSize: 8, color: "var(--text-dim)" }}>SYMBOL</span>
                 <input type="text" value={fsSymbol} onChange={(e) => setFsSymbol(e.target.value)} style={inputStyle} />
               </label>
               <label style={{ display: "grid", gap: 4 }}>
-                <span style={{ fontFamily: MONO, fontSize: 8, color: "#787B86" }}>TIMEFRAME</span>
+                <span style={{ fontFamily: MONO, fontSize: 8, color: "var(--text-dim)" }}>TIMEFRAME</span>
                 <input type="text" value={fsTimeframe} onChange={(e) => setFsTimeframe(e.target.value)} style={inputStyle} />
               </label>
               <label style={{ display: "grid", gap: 4 }}>
-                <span style={{ fontFamily: MONO, fontSize: 8, color: "#787B86" }}>STAKE</span>
+                <span style={{ fontFamily: MONO, fontSize: 8, color: "var(--text-dim)" }}>STAKE</span>
                 <input type="text" value={fsStake} onChange={(e) => setFsStake(e.target.value)} style={inputStyle} />
               </label>
             </div>
@@ -751,30 +751,30 @@ export default function IntegrationsSettingsPage() {
             </Tooltip>
           </div>
 
-          <div style={{ border: "1px solid #1C1E24", padding: 10, background: "#0B0D11" }}>
-            <div style={{ fontFamily: MONO, fontSize: 9, color: "#787B86", marginBottom: 8 }}>MANUAL ORDER (Deriv proposal + buy)</div>
+          <div style={{ border: "1px solid var(--border-subtle)", padding: 10, background: "var(--bg-base)" }}>
+            <div style={{ fontFamily: MONO, fontSize: 9, color: "var(--text-dim)", marginBottom: 8 }}>MANUAL ORDER (Deriv proposal + buy)</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8 }}>
               <label style={{ display: "grid", gap: 4 }}>
-                <span style={{ fontFamily: MONO, fontSize: 8, color: "#787B86" }}>SYMBOL</span>
+                <span style={{ fontFamily: MONO, fontSize: 8, color: "var(--text-dim)" }}>SYMBOL</span>
                 <input type="text" value={moSymbol} onChange={(e) => setMoSymbol(e.target.value)} style={inputStyle} />
               </label>
               <label style={{ display: "grid", gap: 4 }}>
-                <span style={{ fontFamily: MONO, fontSize: 8, color: "#787B86" }}>SIDE</span>
+                <span style={{ fontFamily: MONO, fontSize: 8, color: "var(--text-dim)" }}>SIDE</span>
                 <select value={moSide} onChange={(e) => setMoSide(e.target.value as "long" | "short")} style={inputStyle}>
                   <option value="long">long</option>
                   <option value="short">short</option>
                 </select>
               </label>
               <label style={{ display: "grid", gap: 4 }}>
-                <span style={{ fontFamily: MONO, fontSize: 8, color: "#787B86" }}>STAKE</span>
+                <span style={{ fontFamily: MONO, fontSize: 8, color: "var(--text-dim)" }}>STAKE</span>
                 <input type="text" value={moStake} onChange={(e) => setMoStake(e.target.value)} style={inputStyle} />
               </label>
               <label style={{ display: "grid", gap: 4 }}>
-                <span style={{ fontFamily: MONO, fontSize: 8, color: "#787B86" }}>DURATION</span>
+                <span style={{ fontFamily: MONO, fontSize: 8, color: "var(--text-dim)" }}>DURATION</span>
                 <input type="text" value={moDuration} onChange={(e) => setMoDuration(e.target.value)} style={inputStyle} />
               </label>
               <label style={{ display: "grid", gap: 4 }}>
-                <span style={{ fontFamily: MONO, fontSize: 8, color: "#787B86" }}>DURATION UNIT</span>
+                <span style={{ fontFamily: MONO, fontSize: 8, color: "var(--text-dim)" }}>DURATION UNIT</span>
                 <select
                   value={moDurationUnit}
                   onChange={(e) => setMoDurationUnit(e.target.value as NormalizedOrderIntent["duration_unit"])}
@@ -788,7 +788,7 @@ export default function IntegrationsSettingsPage() {
                 </select>
               </label>
               <label style={{ display: "grid", gap: 4 }}>
-                <span style={{ fontFamily: MONO, fontSize: 8, color: "#787B86" }}>PROVIDER</span>
+                <span style={{ fontFamily: MONO, fontSize: 8, color: "var(--text-dim)" }}>PROVIDER</span>
                 <select
                   value={moProvider}
                   onChange={(e) => setMoProvider(e.target.value as NormalizedOrderIntent["provider"])}

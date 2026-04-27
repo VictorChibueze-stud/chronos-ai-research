@@ -14,6 +14,8 @@ import type {
   AnalysisDevParams,
   AnalysisResponse,
   CandleBar,
+  LayerCacheTimestamps,
+  ManualRecomputeLayer,
   ManualOverride,
   Setup,
   SignalHistoryItem,
@@ -33,6 +35,7 @@ interface MarketCockpitProps {
   setup: Setup;
   candles: CandleBar[];
   analysisData?: AnalysisResponse;
+  onAnalysisDataChange?: (next: AnalysisResponse | null) => void;
   /** False while the Market page is still fetching analysis for the active symbol/TF (candles already loaded). */
   analysisOverlaysReady?: boolean;
   /** Full universe for grouped market picker (from `getSetupsUniverse`). */
@@ -65,9 +68,9 @@ const WALKER_DEPTH_COLORS: Record<number, string> = {
 };
 
 const algoInputStyle: CSSProperties = {
-  background: "#131722",
-  border: "1px solid #2A2E39",
-  color: "#D1D4DC",
+  background: "var(--bg-surface)",
+  border: "1px solid var(--border-default)",
+  color: "var(--text-primary)",
   padding: "6px 8px",
   fontSize: 11,
   fontFamily: '"IBM Plex Mono", monospace',
@@ -95,7 +98,7 @@ const trendQuestionIconStyle: CSSProperties = {
   width: 14,
   height: 14,
   borderRadius: "50%",
-  border: "1px solid #434651",
+  border: "1px solid var(--border-strong)",
   color: "#9CA3AF",
   display: "inline-flex",
   alignItems: "center",
@@ -183,7 +186,7 @@ function trendColor(trend: string): string {
   const t = String(trend ?? "").toLowerCase();
   if (t === "up") return "#00C853";
   if (t === "down") return "#FF1744";
-  return "#787B86";
+  return "var(--text-dim)";
 }
 
 const MARKET_CATEGORY_GROUPS = ["crypto", "forex", "synthetic", "commodity", "other"] as const;
@@ -217,18 +220,18 @@ function dedupeUniverseBySymbol(rows: Setup[]): Setup[] {
 }
 
 function phaseTone(phase: Setup["current_phase"]): string {
-  return phase === "retracement" ? "#F5A623" : "#787B86";
+  return phase === "retracement" ? "#F5A623" : "var(--text-dim)";
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ fontSize: 10, letterSpacing: "0.12em", color: "#787B86", textTransform: "uppercase" }}>
+    <div style={{ fontSize: 10, letterSpacing: "0.12em", color: "var(--text-dim)", textTransform: "uppercase" }}>
       {children}
     </div>
   );
 }
 
-function ValueText({ children, color = "#D1D4DC" }: { children: React.ReactNode; color?: string }) {
+function ValueText({ children, color = "var(--text-primary)" }: { children: React.ReactNode; color?: string }) {
   return (
     <div style={{ fontSize: 13, fontWeight: 700, color, fontFamily: '"IBM Plex Mono", monospace' }}>{children}</div>
   );
@@ -287,9 +290,9 @@ function OverrideForm({
   const [notes, setNotes] = useState(existing?.notes ?? "");
 
   const inputStyle: CSSProperties = {
-    background: "#0D0F14",
-    border: "1px solid #2A2E39",
-    color: "#D1D4DC",
+    background: "var(--bg-base)",
+    border: "1px solid var(--border-default)",
+    color: "var(--text-primary)",
     fontFamily: "'IBM Plex Mono', monospace",
     fontSize: 10,
     padding: "4px 6px",
@@ -303,7 +306,7 @@ function OverrideForm({
   const labelStyle: CSSProperties = {
     fontFamily: "'IBM Plex Mono', monospace",
     fontSize: 8,
-    color: "#4A4D58",
+    color: "var(--text-muted)",
     letterSpacing: "0.1em",
     textTransform: "uppercase",
     display: "block",
@@ -334,7 +337,7 @@ function OverrideForm({
   return (
     <div
       style={{
-        background: "#0D0F14",
+        background: "var(--bg-base)",
         border: "1px solid #F5A62340",
         borderRadius: 2,
         padding: "10px 12px",
@@ -401,7 +404,7 @@ function OverrideForm({
             flex: 1,
             padding: "5px 0",
             background: "#F5A623",
-            color: "#0D0F14",
+            color: "var(--bg-base)",
             border: "none",
             borderRadius: 2,
             fontFamily: "'IBM Plex Mono', monospace",
@@ -443,8 +446,8 @@ function OverrideForm({
           style={{
             padding: "5px 8px",
             background: "transparent",
-            color: "#4A4D58",
-            border: "1px solid #2A2E39",
+            color: "var(--text-muted)",
+            border: "1px solid var(--border-default)",
             borderRadius: 2,
             fontFamily: "'IBM Plex Mono', monospace",
             fontSize: 9,
@@ -480,10 +483,70 @@ const overrideActiveTagStyle: CSSProperties = {
   letterSpacing: "0.08em",
 };
 
+const sectionHeaderBadgeStyle: CSSProperties = {
+  padding: "2px 6px",
+  border: "1px solid #F5A62330",
+  background: "#F5A62308",
+  color: "#F5A623",
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: 8,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+  whiteSpace: "nowrap",
+};
+
+const sectionStatusSlotStyle: CSSProperties = {
+  minWidth: 102,
+  textAlign: "right",
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: 8,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const ALL_RECOMPUTE_LAYERS: ManualRecomputeLayer[] = ["global", "prime", "walker", "candidate"];
+
+const SECTION_OVERRIDE_TYPES: Record<ManualRecomputeLayer, ManualOverride["override_type"][]> = {
+  global: ["global_choch", "trend_bounds"],
+  prime: ["ichoch"],
+  walker: ["depth_choch"],
+  candidate: ["candidate_choch", "candidate_ichoch"],
+};
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function hasTimestampAdvanced(previous: string | null | undefined, next: string | null | undefined): boolean {
+  if (!next) return false;
+  if (!previous) return true;
+  const previousMs = Date.parse(previous);
+  const nextMs = Date.parse(next);
+  if (Number.isNaN(previousMs) || Number.isNaN(nextMs)) {
+    return previous !== next;
+  }
+  return nextMs > previousMs;
+}
+
+function normalizeOverrideMap(overrides: Record<string, ManualOverride> | null | undefined): Record<string, ManualOverride> {
+  if (!overrides) return {};
+  return Object.fromEntries(
+    Object.entries(overrides).filter(([, value]) => value && value.is_active !== false),
+  );
+}
+
+function sectionHasActiveOverride(
+  overrides: Record<string, ManualOverride>,
+  layer: ManualRecomputeLayer,
+): boolean {
+  return SECTION_OVERRIDE_TYPES[layer].some((overrideType) => overrides[overrideType]?.is_active);
+}
+
 export function MarketCockpit({
   setup,
   candles,
   analysisData,
+  onAnalysisDataChange,
   analysisOverlaysReady = true,
   universeMarkets = [],
   activeTimeframe,
@@ -532,6 +595,7 @@ export function MarketCockpit({
   const [infoPanelCollapsed, setInfoPanelCollapsed] = useState(false);
   const [globalStructureOpen, setGlobalStructureOpen] = useState(false);
   const [primeImpulseOpen, setPrimeImpulseOpen] = useState(false);
+  const [walkerOpen, setWalkerOpen] = useState(true);
   const [candidateImpulseOpen, setCandidateImpulseOpen] = useState(false);
   const [analysisParamsOpen, setAnalysisParamsOpen] = useState(false);
   const [advancedOverridesOpen, setAdvancedOverridesOpen] = useState(false);
@@ -540,10 +604,20 @@ export function MarketCockpit({
   const [trendWindowStructure, setTrendWindowStructure] = useState<TrendWindowStructure | null>(null);
   const [marketContextOpen, setMarketContextOpen] = useState(true);
   const [devOpen, setDevOpen] = useState(false);
+  const [chartTheme, setChartTheme] = useState<"dark" | "light">("dark");
 
   const [overrides, setOverrides] = useState<Record<string, ManualOverride>>({});
   const [editingSection, setEditingSection] = useState<string | null>(null);
   const [savingOverride, setSavingOverride] = useState(false);
+  const [isOverrideRecomputing, setIsOverrideRecomputing] = useState(false);
+  const [recomputeLayers, setRecomputeLayers] = useState<ManualRecomputeLayer[]>([]);
+  const [recomputeScope, setRecomputeScope] = useState<Record<ManualRecomputeLayer, boolean>>({
+    global: true,
+    prime: true,
+    walker: true,
+    candidate: true,
+  });
+  const recomputeRunIdRef = useRef(0);
 
   function patchAnalysisDevParams(partial: Partial<AnalysisDevParams>) {
     onAnalysisDevParamsChange({ ...analysisDevParams, ...partial });
@@ -573,6 +647,17 @@ export function MarketCockpit({
   };
 
   useEffect(() => {
+    const update = () => {
+      const attr = document.documentElement.getAttribute("data-theme");
+      setChartTheme(attr === "light" ? "light" : "dark");
+    };
+    update();
+    const mo = new MutationObserver(update);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => mo.disconnect();
+  }, []);
+
+  useEffect(() => {
     coreCommittedSnapRef.current = "";
   }, [setup.symbol]);
 
@@ -587,7 +672,7 @@ export function MarketCockpit({
         list.forEach((o) => {
           map[o.override_type] = o;
         });
-        setOverrides(map);
+        setOverrides(normalizeOverrideMap(map));
       })
       .catch(() => {});
     return () => {
@@ -596,10 +681,89 @@ export function MarketCockpit({
   }, [setup.symbol]);
 
   useEffect(() => {
-    const mo = analysisData?.manual_overrides;
-    if (!mo) return;
-    setOverrides((prev) => ({ ...prev, ...mo }));
+    if (analysisData?.manual_overrides === undefined) return;
+    setOverrides(normalizeOverrideMap(analysisData.manual_overrides));
   }, [analysisData?.manual_overrides]);
+
+  useEffect(() => {
+    recomputeRunIdRef.current += 1;
+    setIsOverrideRecomputing(false);
+    setRecomputeLayers([]);
+    setRecomputeScope({ global: true, prime: true, walker: true, candidate: true });
+  }, [setup.symbol]);
+
+  const beginRecomputePolling = async (
+    layers: ManualRecomputeLayer[],
+    baselineAnalysis?: AnalysisResponse | null,
+  ) => {
+    const normalizedLayers = layers.length > 0 ? layers : ALL_RECOMPUTE_LAYERS;
+    const baselineLayerTimestamps = baselineAnalysis?.layer_cache_timestamps ?? null;
+    const baselineAnalysisComputedAt = baselineAnalysis?.analysis_computed_at ?? null;
+    const runId = ++recomputeRunIdRef.current;
+
+    setIsOverrideRecomputing(true);
+    setRecomputeLayers(normalizedLayers);
+
+    const startedAt = Date.now();
+    let latestAnalysis: AnalysisResponse | null = baselineAnalysis ?? null;
+
+    while (Date.now() - startedAt < 60_000) {
+      await sleep(3_000);
+      if (runId !== recomputeRunIdRef.current) return;
+
+      try {
+        const fresh = await api.getAnalysis(setup.symbol, activeTimeframe, analysisQueryForApi);
+        latestAnalysis = fresh;
+        if (runId !== recomputeRunIdRef.current) return;
+
+        const nextLayerTimestamps: LayerCacheTimestamps | null | undefined = fresh.layer_cache_timestamps;
+        const complete = nextLayerTimestamps
+          ? normalizedLayers.every((layer) =>
+              hasTimestampAdvanced(
+                baselineLayerTimestamps?.[layer] ?? null,
+                nextLayerTimestamps?.[layer] ?? null,
+              ),
+            )
+          : hasTimestampAdvanced(baselineAnalysisComputedAt, fresh.analysis_computed_at ?? null);
+
+        if (complete) {
+          onAnalysisDataChange?.(fresh);
+          setOverrides(normalizeOverrideMap(fresh.manual_overrides));
+          setIsOverrideRecomputing(false);
+          setRecomputeLayers([]);
+          return;
+        }
+      } catch (error) {
+        console.error("Recompute polling failed:", error);
+      }
+    }
+
+    if (runId === recomputeRunIdRef.current) {
+      onAnalysisDataChange?.(latestAnalysis);
+      if (latestAnalysis) {
+        setOverrides(normalizeOverrideMap(latestAnalysis.manual_overrides));
+      }
+      setIsOverrideRecomputing(false);
+      setRecomputeLayers([]);
+    }
+  };
+
+  const handleSectionScopeToggle = (layer: ManualRecomputeLayer) => {
+    setRecomputeScope((prev) => ({ ...prev, [layer]: !prev[layer] }));
+  };
+
+  const layersForOverrideType = (overrideType: ManualOverride["override_type"]): ManualRecomputeLayer[] => {
+    if (overrideType === "trend_bounds" || overrideType === "global_choch") {
+      return ALL_RECOMPUTE_LAYERS;
+    }
+    if (overrideType === "ichoch") {
+      return ["prime", "walker", "candidate"];
+    }
+    if (overrideType === "depth_choch") {
+      return ["walker", "candidate"];
+    }
+    return ["candidate"];
+  };
 
   const handleSaveOverride = async (data: Partial<ManualOverride>) => {
     if (!data.override_type) return;
@@ -616,6 +780,9 @@ export function MarketCockpit({
         [override_type]: result.override,
       }));
       setEditingSection(null);
+      if (result.recompute_triggered) {
+        void beginRecomputePolling(layersForOverrideType(override_type), analysisData ?? null);
+      }
     } catch (e) {
       console.error("Failed to save override:", e);
     } finally {
@@ -627,17 +794,61 @@ export function MarketCockpit({
     if (!setup.symbol) return;
     setSavingOverride(true);
     try {
-      await api.resetManualStructureOverride(setup.symbol, overrideType);
+      const result = await api.resetManualStructureOverride(setup.symbol, overrideType);
       setOverrides((prev) => {
         const next = { ...prev };
         delete next[overrideType];
         return next;
       });
       setEditingSection(null);
+      if (result.recompute_triggered) {
+        void beginRecomputePolling(
+          layersForOverrideType(overrideType as ManualOverride["override_type"]),
+          analysisData ?? null,
+        );
+      }
     } catch (e) {
       console.error("Failed to reset override:", e);
     } finally {
       setSavingOverride(false);
+    }
+  };
+
+  const handleResetSection = async (layer: ManualRecomputeLayer) => {
+    if (!setup.symbol) return;
+    const activeTypes = SECTION_OVERRIDE_TYPES[layer].filter((overrideType) => overrides[overrideType]?.is_active);
+    if (activeTypes.length === 0) return;
+
+    setSavingOverride(true);
+    try {
+      for (const overrideType of activeTypes) {
+        await api.resetManualStructureOverride(setup.symbol, overrideType);
+      }
+      setOverrides((prev) => {
+        const next = { ...prev };
+        for (const overrideType of activeTypes) {
+          delete next[overrideType];
+        }
+        return next;
+      });
+      setEditingSection(null);
+      void beginRecomputePolling(layersForOverrideType(activeTypes[0]!), analysisData ?? null);
+    } catch (error) {
+      console.error("Failed to reset section override:", error);
+    } finally {
+      setSavingOverride(false);
+    }
+  };
+
+  const triggerScopedRecompute = async (layers: ManualRecomputeLayer[]) => {
+    if (!setup.symbol || layers.length === 0) return;
+    try {
+      const result = await api.recomputeManualStructureOverrides(setup.symbol, layers);
+      if (result.recompute_triggered) {
+        void beginRecomputePolling(result.layers, analysisData ?? null);
+      }
+    } catch (error) {
+      console.error("Failed to trigger scoped recompute:", error);
     }
   };
 
@@ -777,7 +988,7 @@ export function MarketCockpit({
 
   const isDownTrend = canonicalTrend === "down";
   const isRangeTrend = canonicalTrend !== "up" && canonicalTrend !== "down";
-  const zoneMapColor = isRangeTrend ? "#787B86" : isDownTrend ? "#EF5350" : "#26A69A";
+  const zoneMapColor = isRangeTrend ? "var(--text-dim)" : isDownTrend ? "#EF5350" : "#26A69A";
   const zoneMapLabel = isRangeTrend ? "RANGE" : isDownTrend ? "DOWN ↓" : "UP ↑";
 
   const firstConfirmed = firstConfirmedLeg(legs);
@@ -900,17 +1111,26 @@ export function MarketCockpit({
   const candidateWalkerDepth = candidateWalkerState?.max_depth_reached ?? 0;
   const candidateWalkerWaiting = candidateWalkerState?.waiting_for ?? "";
   const candidateGlobalChoch = candidateWalkerState?.global_choch_zone ?? null;
+  const activeOverrideCount = Object.values(overrides).filter((override) => override?.is_active).length;
+  const globalOverrideActive = sectionHasActiveOverride(overrides, "global");
+  const primeOverrideActive = sectionHasActiveOverride(overrides, "prime");
+  const walkerOverrideActive = sectionHasActiveOverride(overrides, "walker");
+  const candidateOverrideActive = sectionHasActiveOverride(overrides, "candidate");
+  const globalRecomputing = isOverrideRecomputing && recomputeLayers.includes("global");
+  const primeRecomputing = isOverrideRecomputing && recomputeLayers.includes("prime");
+  const walkerRecomputing = isOverrideRecomputing && recomputeLayers.includes("walker");
+  const candidateRecomputing = isOverrideRecomputing && recomputeLayers.includes("candidate");
 
   const panelRowLabel: CSSProperties = {
     fontSize: 9,
-    color: "#787B86",
+    color: "var(--text-dim)",
     letterSpacing: "0.08em",
     textTransform: "uppercase",
   };
   const panelRowValue: CSSProperties = {
     fontSize: 11,
     fontWeight: 700,
-    color: "#D1D4DC",
+    color: "var(--text-primary)",
     textAlign: "right" as const,
   };
 
@@ -975,13 +1195,13 @@ export function MarketCockpit({
         gap: 8,
         height: "100%",
         padding: 10,
-        background: "#0D0F14",
-        color: "#D1D4DC",
+        background: "var(--bg-base)",
+        color: "var(--text-primary)",
         fontFamily: '"IBM Plex Mono", monospace',
       }}
     >
-      <div ref={marketPickerRef} style={{ display: "flex", alignItems: "center", gap: 8, border: "1px solid #1C1E24", background: "#111318", padding: "6px 8px", position: "relative" }}>
-        <span style={{ fontSize: 9, color: "#787B86", letterSpacing: "0.1em", textTransform: "uppercase" }}>Market</span>
+      <div ref={marketPickerRef} style={{ display: "flex", alignItems: "center", gap: 8, border: "1px solid var(--border-subtle)", background: "var(--bg-surface)", padding: "6px 8px", position: "relative" }}>
+        <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.1em", textTransform: "uppercase" }}>Market</span>
         <Tooltip content="Open market picker">
           <button
             type="button"
@@ -992,9 +1212,9 @@ export function MarketCockpit({
             style={{
               minWidth: 140,
               fontSize: 11,
-              background: "#0B0D11",
-              border: "1px solid #1E222D",
-              color: "#D1D4DC",
+              background: "var(--bg-base)",
+              border: "1px solid var(--bg-elevated)",
+              color: "var(--text-primary)",
               padding: "6px 10px",
               fontFamily: '"IBM Plex Mono", monospace',
               cursor: "pointer",
@@ -1006,7 +1226,7 @@ export function MarketCockpit({
             }}
           >
             <span style={{ fontWeight: 700 }}>{setup.symbol}</span>
-            <span style={{ fontSize: 9, color: "#787B86" }}>{marketPickerOpen ? "▲" : "▼"}</span>
+            <span style={{ fontSize: 9, color: "var(--text-dim)" }}>{marketPickerOpen ? "▲" : "▼"}</span>
           </button>
         </Tooltip>
         {marketPickerOpen ? (
@@ -1018,15 +1238,15 @@ export function MarketCockpit({
               marginTop: 4,
               width: 320,
               maxHeight: 420,
-              border: "1px solid #1C1E24",
-              background: "#111318",
+              border: "1px solid var(--border-subtle)",
+              background: "var(--bg-surface)",
               zIndex: 20,
               display: "flex",
               flexDirection: "column",
               boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
             }}
           >
-            <div style={{ padding: 8, borderBottom: "1px solid #1C1E24" }}>
+            <div style={{ padding: 8, borderBottom: "1px solid var(--border-subtle)" }}>
               <input
                 type="text"
                 placeholder="Filter symbols..."
@@ -1037,9 +1257,9 @@ export function MarketCockpit({
                   width: "100%",
                   boxSizing: "border-box",
                   fontSize: 11,
-                  background: "#0B0D11",
-                  border: "1px solid #1E222D",
-                  color: "#D1D4DC",
+                  background: "var(--bg-base)",
+                  border: "1px solid var(--bg-elevated)",
+                  color: "var(--text-primary)",
                   padding: "6px 10px",
                   fontFamily: '"IBM Plex Mono", monospace',
                   outline: "none",
@@ -1048,9 +1268,9 @@ export function MarketCockpit({
             </div>
             <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
               {universeDeduped.length === 0 ? (
-                <div style={{ padding: 12, fontSize: 10, color: "#787B86" }}>Loading universe…</div>
+                <div style={{ padding: 12, fontSize: 10, color: "var(--text-dim)" }}>Loading universe…</div>
               ) : filteredUniverse.length === 0 ? (
-                <div style={{ padding: 12, fontSize: 10, color: "#787B86" }}>No matches</div>
+                <div style={{ padding: 12, fontSize: 10, color: "var(--text-dim)" }}>No matches</div>
               ) : (
                 MARKET_CATEGORY_GROUPS.map((groupKey) => {
                   const rows = groupedByCategory[groupKey];
@@ -1066,8 +1286,8 @@ export function MarketCockpit({
                           letterSpacing: "0.12em",
                           color: "#F5A623",
                           textTransform: "uppercase",
-                          background: "#0D0F14",
-                          borderBottom: "1px solid #1C1E24",
+                          background: "var(--bg-base)",
+                          borderBottom: "1px solid var(--border-subtle)",
                         }}
                       >
                         {GROUP_HEADING[groupKey]}
@@ -1090,16 +1310,16 @@ export function MarketCockpit({
                               padding: "8px 10px",
                               textAlign: "left",
                               border: "none",
-                              borderBottom: "1px solid #1C1E24",
+                              borderBottom: "1px solid var(--border-subtle)",
                               background: active ? "rgba(245,166,35,0.12)" : "transparent",
-                              color: active ? "#F5A623" : "#D1D4DC",
+                              color: active ? "#F5A623" : "var(--text-primary)",
                               fontSize: 11,
                               cursor: "pointer",
                               fontFamily: '"IBM Plex Mono", monospace',
                             }}
                           >
                             {sym}
-                            <span style={{ marginLeft: 8, fontSize: 9, color: "#787B86" }}>{row.category}</span>
+                            <span style={{ marginLeft: 8, fontSize: 9, color: "var(--text-dim)" }}>{row.category}</span>
                           </button>
                         );
                       })}
@@ -1122,7 +1342,7 @@ export function MarketCockpit({
           transition: "grid-template-columns 220ms ease",
         }}
       >
-      <section style={{ display: "flex", minHeight: 0, flexDirection: "column", border: "1px solid #1C1E24", background: "#111318", position: "relative" }}>
+      <section style={{ display: "flex", minHeight: 0, flexDirection: "column", border: "1px solid var(--border-subtle)", background: "var(--bg-surface)", position: "relative" }}>
         <Tooltip content={infoPanelCollapsed ? "Show info panel" : "Hide info panel"}>
           <span style={{ position: "absolute", right: -12, top: 12, zIndex: 20 }}>
             <PanelEdgeCollapseToggle
@@ -1134,16 +1354,36 @@ export function MarketCockpit({
             />
           </span>
         </Tooltip>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid #1C1E24", padding: "8px 12px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--border-subtle)", padding: "8px 12px" }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.04em", color: "#D1D4DC" }}>{setup.symbol}</div>
-            <div style={{ marginTop: 4, fontSize: 10, letterSpacing: "0.12em", color: "#787B86", textTransform: "uppercase" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.04em", color: "var(--text-primary)" }}>{setup.symbol}</div>
+              {setup.category === "equities" &&
+                setup.display_name &&
+                setup.display_name !== setup.symbol && (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "var(--text-secondary)",
+                      letterSpacing: "0.03em",
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      maxWidth: 200,
+                    }}
+                  >
+                    {setup.display_name}
+                  </div>
+                )}
+            </div>
+            <div style={{ marginTop: 4, fontSize: 10, letterSpacing: "0.12em", color: "var(--text-dim)", textTransform: "uppercase" }}>
               {setup.category} · {activeTimeframe} · {setup.broker}
             </div>
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
-              <div style={{ fontSize: 10, letterSpacing: "0.12em", color: "#787B86", textTransform: "uppercase" }}>Overlays</div>
+              <div style={{ fontSize: 10, letterSpacing: "0.12em", color: "var(--text-dim)", textTransform: "uppercase" }}>Overlays</div>
               <div ref={overlayGroupsRef} style={{ display: "flex", alignItems: "center", gap: 4, position: "relative" }}>
                 {overlayMasterGroups.map((group) => {
                   const keys = GROUP_KEYS[group];
@@ -1296,7 +1536,7 @@ export function MarketCockpit({
           </div>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", padding: "6px 16px", borderBottom: "1px solid #1C1E24", gap: 4 }}>
+        <div style={{ display: "flex", alignItems: "center", padding: "6px 16px", borderBottom: "1px solid var(--border-subtle)", gap: 4 }}>
           {TIMEFRAMES.map((tf) => {
             const isActive = activeTimeframe === tf;
             return (
@@ -1309,8 +1549,8 @@ export function MarketCockpit({
                     fontFamily: '"IBM Plex Mono", monospace',
                     letterSpacing: "0.06em",
                     background: isActive ? "#F5A623" : "transparent",
-                    color: isActive ? "#0D0F14" : "#4A4D58",
-                    border: isActive ? "1px solid #F5A623" : "1px solid #1C1E24",
+                    color: isActive ? "var(--bg-base)" : "var(--text-muted)",
+                    border: isActive ? "1px solid #F5A623" : "1px solid var(--border-subtle)",
                     borderRadius: 2,
                     cursor: "pointer",
                   }}
@@ -1342,10 +1582,10 @@ export function MarketCockpit({
               onClick={onBack}
               aria-label="Back"
               onMouseEnter={(e) => {
-                e.currentTarget.style.color = "#D1D4DC";
+                e.currentTarget.style.color = "var(--text-primary)";
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.color = "#787B86";
+                e.currentTarget.style.color = "var(--text-dim)";
               }}
               style={{
                 alignSelf: "flex-start",
@@ -1357,7 +1597,7 @@ export function MarketCockpit({
                 fontSize: 10,
                 letterSpacing: "0.1em",
                 textTransform: "uppercase",
-                color: "#787B86",
+                color: "var(--text-dim)",
                 cursor: "pointer",
               }}
             >
@@ -1421,9 +1661,11 @@ export function MarketCockpit({
               candidatePrimeChochZone={analysisOverlaysReady ? (analysisData?.candidate_move?.candidate_prime_choch_zone ?? null) : null}
               candidateWalker={analysisOverlaysReady ? (analysisData?.candidate_move?.candidate_walker ?? null) : null}
               showAnalysisOverlays={analysisOverlaysReady}
+              analysisReady={analysisOverlaysReady && analysisData != null}
               isSwitchingTimeframe={isSwitchingTimeframe}
               openPaperTrade={analysisData?.open_paper_trade ?? null}
               showPaperTradeOverlays={overlayState.paperTradeOverlays}
+              theme={chartTheme}
             />
           </div>
         </div>
@@ -1444,8 +1686,8 @@ export function MarketCockpit({
         {/* MARKET CONTEXT */}
         <section
           style={{
-            border: "1px solid #2A2E39",
-            background: "#0E1014",
+            border: "1px solid var(--border-default)",
+            background: "var(--bg-base)",
             padding: 0,
             fontFamily: '"IBM Plex Mono", monospace',
             fontSize: 10,
@@ -1462,7 +1704,7 @@ export function MarketCockpit({
               padding: "10px 12px",
               background: "transparent",
               border: "none",
-              color: "#787B86",
+              color: "var(--text-dim)",
               cursor: "pointer",
               textAlign: "left",
               letterSpacing: "0.1em",
@@ -1470,12 +1712,12 @@ export function MarketCockpit({
             }}
           >
             <span>MARKET CONTEXT</span>
-            <span style={{ color: "#434651" }}>{marketContextOpen ? "−" : "+"}</span>
+            <span style={{ color: "var(--text-dim)" }}>{marketContextOpen ? "−" : "+"}</span>
           </button>
           {marketContextOpen && (
             <div
               style={{
-                borderTop: "1px solid #2A2E39",
+                borderTop: "1px solid var(--border-default)",
                 padding: "10px 12px 14px",
               }}
             >
@@ -1484,19 +1726,19 @@ export function MarketCockpit({
           )}
         </section>
 
-        <section style={{ border: "1px solid #1C1E24", background: "#111318", padding: 12 }}>
+        <section style={{ border: "1px solid var(--border-subtle)", background: "var(--bg-surface)", padding: 12 }}>
           <SectionLabel>Trend Summary</SectionLabel>
           <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div>
-              <div style={{ fontSize: 9, letterSpacing: "0.1em", color: "#787B86", textTransform: "uppercase" }}>Trend</div>
+              <div style={{ fontSize: 9, letterSpacing: "0.1em", color: "var(--text-dim)", textTransform: "uppercase" }}>Trend</div>
               <ValueText color={trendColor(canonicalTrend)}>{canonicalTrend.toUpperCase()}</ValueText>
             </div>
             <div>
-              <div style={{ fontSize: 9, letterSpacing: "0.1em", color: "#787B86", textTransform: "uppercase" }}>Phase</div>
+              <div style={{ fontSize: 9, letterSpacing: "0.1em", color: "var(--text-dim)", textTransform: "uppercase" }}>Phase</div>
               <ValueText color={phaseTone(setup.current_phase)}>{setup.current_phase.toUpperCase()}</ValueText>
             </div>
             <div>
-              <div style={{ fontSize: 9, letterSpacing: "0.1em", color: "#787B86", textTransform: "uppercase" }}>State</div>
+              <div style={{ fontSize: 9, letterSpacing: "0.1em", color: "var(--text-dim)", textTransform: "uppercase" }}>State</div>
               <div style={{ marginTop: 4 }}>
                 <MarketStateBadge
                   state={analysisData?.market_state ?? setup.market_state ?? "WAITING"}
@@ -1504,7 +1746,7 @@ export function MarketCockpit({
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 9, letterSpacing: "0.1em", color: "#787B86", textTransform: "uppercase" }}>Score</div>
+              <div style={{ fontSize: 9, letterSpacing: "0.1em", color: "var(--text-dim)", textTransform: "uppercase" }}>Score</div>
               <ValueText>{formatScore(setup.trend_score)}</ValueText>
             </div>
             {candidateMove != null && candidateMove.structure_broken != null ? (
@@ -1513,7 +1755,7 @@ export function MarketCockpit({
                   style={{
                     fontSize: 9,
                     letterSpacing: "0.1em",
-                    color: "#787B86",
+                    color: "var(--text-dim)",
                     textTransform: "uppercase",
                   }}
                 >
@@ -1532,7 +1774,7 @@ export function MarketCockpit({
           <div
             style={{
               marginTop: 12,
-              borderTop: "1px solid #1C1E24",
+              borderTop: "1px solid var(--border-subtle)",
               paddingTop: 12,
               display: "grid",
               gap: 10,
@@ -1540,7 +1782,7 @@ export function MarketCockpit({
           >
             <SectionLabel>Score Components</SectionLabel>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-              <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "#787B86", textTransform: "uppercase" }}>
+              <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "var(--text-dim)", textTransform: "uppercase" }}>
                 Market state
               </span>
               <MarketStateBadge
@@ -1553,10 +1795,10 @@ export function MarketCockpit({
               />
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-              <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "#787B86", textTransform: "uppercase" }}>
+              <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "var(--text-dim)", textTransform: "uppercase" }}>
                 State score
               </span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#D1D4DC" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)" }}>
                 {(() => {
                   const explicit = setup.score_components?.state_score;
                   if (explicit != null) return explicit.toFixed(1);
@@ -1570,10 +1812,10 @@ export function MarketCockpit({
               </span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-              <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "#787B86", textTransform: "uppercase" }}>
+              <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "var(--text-dim)", textTransform: "uppercase" }}>
                 Opportunity
               </span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#D1D4DC", textAlign: "right" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)", textAlign: "right" }}>
                 {setup.score_components?.opportunity_score != null
                   ? setup.score_components.opportunity_score.toFixed(1)
                   : "0.0"}
@@ -1581,20 +1823,20 @@ export function MarketCockpit({
               </span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-              <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "#787B86", textTransform: "uppercase" }}>
+              <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "var(--text-dim)", textTransform: "uppercase" }}>
                 Structure
               </span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#D1D4DC" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)" }}>
                 {setup.score_components?.structure_score != null
                   ? setup.score_components.structure_score.toFixed(1)
                   : "0.0"}
               </span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-              <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "#787B86", textTransform: "uppercase" }}>
+              <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "var(--text-dim)", textTransform: "uppercase" }}>
                 Profile
               </span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#D1D4DC", textTransform: "uppercase" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)", textTransform: "uppercase" }}>
                 {setup.score_components?.profile ?? "BALANCED"}
               </span>
             </div>
@@ -1622,15 +1864,15 @@ export function MarketCockpit({
                   </div>
                   <div style={{ display: "grid", gap: 6, fontSize: 11 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                      <span style={{ color: "#787B86" }}>Entry</span>
-                      <span style={{ color: "#FFFFFF", fontWeight: 600 }}>{formatPrice(pt.entry_price)}</span>
+                      <span style={{ color: "var(--text-dim)" }}>Entry</span>
+                      <span style={{ color: "var(--text-primary)", fontWeight: 600 }}>{formatPrice(pt.entry_price)}</span>
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                      <span style={{ color: "#787B86" }}>Stop</span>
+                      <span style={{ color: "var(--text-dim)" }}>Stop</span>
                       <span style={{ color: "#FF1744", fontWeight: 600 }}>{formatPrice(pt.stop_price)}</span>
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                      <span style={{ color: "#787B86" }}>TP</span>
+                      <span style={{ color: "var(--text-dim)" }}>TP</span>
                       <span style={{ color: "#00C853", fontWeight: 600 }}>
                         {pt.take_profit_price != null ? formatPrice(pt.take_profit_price) : "\u2014"}
                       </span>
@@ -1645,10 +1887,72 @@ export function MarketCockpit({
           </section>
         ) : null}
 
+        {activeOverrideCount > 0 && (
+          <section
+            style={{
+              border: "1px solid var(--border-default)",
+              background: "var(--bg-base)",
+              padding: "10px 12px",
+              fontFamily: '"IBM Plex Mono", monospace',
+              fontSize: 9,
+              display: "grid",
+              gap: 8,
+            }}
+          >
+            <div style={{ color: "var(--text-dim)", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+              Recompute Scope
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+              {ALL_RECOMPUTE_LAYERS.map((layer) => (
+                <label
+                  key={layer}
+                  style={{
+                    display: "inline-flex",
+                    gap: 6,
+                    alignItems: "center",
+                    color: "var(--text-primary)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.08em",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={recomputeScope[layer]}
+                    onChange={() => handleSectionScopeToggle(layer)}
+                    disabled={isOverrideRecomputing}
+                  />
+                  <span>{layer}</span>
+                </label>
+              ))}
+              <button
+                type="button"
+                disabled={isOverrideRecomputing || !ALL_RECOMPUTE_LAYERS.some((layer) => recomputeScope[layer])}
+                onClick={() => {
+                  const selected = ALL_RECOMPUTE_LAYERS.filter((layer) => recomputeScope[layer]);
+                  void triggerScopedRecompute(selected);
+                }}
+                style={{
+                  marginLeft: "auto",
+                  padding: "5px 10px",
+                  background: isOverrideRecomputing ? "#F5A62320" : "#F5A623",
+                  color: isOverrideRecomputing ? "#F5A623" : "var(--bg-base)",
+                  border: "1px solid #F5A62340",
+                  borderRadius: 2,
+                  cursor: isOverrideRecomputing ? "not-allowed" : "pointer",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                }}
+              >
+                {isOverrideRecomputing ? "Recomputing..." : "Run"}
+              </button>
+            </div>
+          </section>
+        )}
+
         <section
           style={{
-            border: "1px solid #2A2E39",
-            background: "#0E1014",
+            border: "1px solid var(--border-default)",
+            background: "var(--bg-base)",
             padding: 0,
             fontFamily: '"IBM Plex Mono", monospace',
             fontSize: 10,
@@ -1666,7 +1970,7 @@ export function MarketCockpit({
                 padding: 0,
                 background: "transparent",
                 border: "none",
-                color: "#787B86",
+                color: "var(--text-dim)",
                 cursor: "pointer",
                 textAlign: "left",
                 letterSpacing: "0.1em",
@@ -1674,8 +1978,12 @@ export function MarketCockpit({
               }}
             >
               <span>GLOBAL STRUCTURE</span>
-              <span style={{ color: "#434651" }}>{globalStructureOpen ? "−" : "+"}</span>
+              <span style={{ color: "var(--text-dim)" }}>{globalStructureOpen ? "−" : "+"}</span>
             </button>
+            {globalOverrideActive && <span style={sectionHeaderBadgeStyle}>Override Active</span>}
+            <span style={{ ...sectionStatusSlotStyle, color: globalRecomputing ? "#F5A623" : "transparent" }}>
+              {globalRecomputing ? "Recomputing..." : "."}
+            </span>
             <button
               type="button"
               onClick={(e) => {
@@ -1684,7 +1992,7 @@ export function MarketCockpit({
               }}
               style={{
                 ...overrideEditButtonStyle,
-                color: overrides["global_choch"]?.is_active ? "#F5A623" : "#2A2E39",
+                color: overrides["global_choch"]?.is_active ? "#F5A623" : "var(--border-default)",
               }}
             >
               {overrides["global_choch"]?.is_active ? "● CHOCH" : "CHOCH"}
@@ -1697,15 +2005,25 @@ export function MarketCockpit({
               }}
               style={{
                 ...overrideEditButtonStyle,
-                color: overrides["trend_bounds"]?.is_active ? "#F5A623" : "#2A2E39",
+                color: overrides["trend_bounds"]?.is_active ? "#F5A623" : "var(--border-default)",
               }}
             >
               {overrides["trend_bounds"]?.is_active ? "● TREND" : "TREND"}
             </button>
+            {globalOverrideActive && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleResetSection("global");
+                }}
+                disabled={savingOverride || isOverrideRecomputing}
+                style={{ ...overrideEditButtonStyle, color: "#EF5350" }}
+              >
+                RESET
+              </button>
+            )}
           </div>
-          {overrides["global_choch"]?.is_active && (
-            <div style={overrideActiveTagStyle}>● CHOCH OVERRIDE ACTIVE</div>
-          )}
           {editingSection === "global_structure" && (
             <OverrideForm
               overrideType="global_choch"
@@ -1715,9 +2033,6 @@ export function MarketCockpit({
               onClose={() => setEditingSection(null)}
               saving={savingOverride}
             />
-          )}
-          {overrides["trend_bounds"]?.is_active && (
-            <div style={overrideActiveTagStyle}>● TREND BOUNDS OVERRIDE ACTIVE</div>
           )}
           {editingSection === "trend_bounds" && (
             <OverrideForm
@@ -1732,7 +2047,7 @@ export function MarketCockpit({
           {globalStructureOpen && (
             <div
               style={{
-                borderTop: "1px solid #2A2E39",
+                borderTop: "1px solid var(--border-default)",
                 padding: "10px 12px 12px",
                 display: "grid",
                 gap: 8,
@@ -1785,8 +2100,8 @@ export function MarketCockpit({
 
         <section
           style={{
-            border: "1px solid #2A2E39",
-            background: "#0E1014",
+            border: "1px solid var(--border-default)",
+            background: "var(--bg-base)",
             padding: 0,
             fontFamily: '"IBM Plex Mono", monospace',
             fontSize: 10,
@@ -1804,7 +2119,7 @@ export function MarketCockpit({
                 padding: 0,
                 background: "transparent",
                 border: "none",
-                color: "#787B86",
+                color: "var(--text-dim)",
                 cursor: "pointer",
                 textAlign: "left",
                 letterSpacing: "0.1em",
@@ -1812,8 +2127,12 @@ export function MarketCockpit({
               }}
             >
               <span>PRIME IMPULSE</span>
-              <span style={{ color: "#434651" }}>{primeImpulseOpen ? "−" : "+"}</span>
+              <span style={{ color: "var(--text-dim)" }}>{primeImpulseOpen ? "−" : "+"}</span>
             </button>
+            {primeOverrideActive && <span style={sectionHeaderBadgeStyle}>Override Active</span>}
+            <span style={{ ...sectionStatusSlotStyle, color: primeRecomputing ? "#F5A623" : "transparent" }}>
+              {primeRecomputing ? "Recomputing..." : "."}
+            </span>
             <button
               type="button"
               onClick={(e) => {
@@ -1822,15 +2141,25 @@ export function MarketCockpit({
               }}
               style={{
                 ...overrideEditButtonStyle,
-                color: overrides["ichoch"]?.is_active ? "#F5A623" : "#2A2E39",
+                color: overrides["ichoch"]?.is_active ? "#F5A623" : "var(--border-default)",
               }}
             >
               {overrides["ichoch"]?.is_active ? "● EDIT" : "EDIT"}
             </button>
+            {primeOverrideActive && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleResetSection("prime");
+                }}
+                disabled={savingOverride || isOverrideRecomputing}
+                style={{ ...overrideEditButtonStyle, color: "#EF5350" }}
+              >
+                RESET
+              </button>
+            )}
           </div>
-          {overrides["ichoch"]?.is_active && (
-            <div style={overrideActiveTagStyle}>● OVERRIDE ACTIVE</div>
-          )}
           {editingSection === "prime_impulse" && (
             <OverrideForm
               overrideType="ichoch"
@@ -1844,7 +2173,7 @@ export function MarketCockpit({
           {primeImpulseOpen && (
             <div
               style={{
-                borderTop: "1px solid #2A2E39",
+                borderTop: "1px solid var(--border-default)",
                 padding: "10px 12px 12px",
                 display: "grid",
                 gap: 8,
@@ -1877,206 +2206,219 @@ export function MarketCockpit({
 
         <section
           style={{
-            border: "1px solid #2A2E39",
-            background: "#0E1014",
+            border: "1px solid var(--border-default)",
+            background: "var(--bg-base)",
             padding: 0,
             fontFamily: '"IBM Plex Mono", monospace',
           }}
         >
-          <div
-            style={{
-              borderTop: "1px solid #1E222D",
-              padding: "12px 0 4px 0",
-            }}
-          >
-            <div
+          <div style={{ display: "flex", alignItems: "center", padding: "10px 12px", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => setWalkerOpen((o) => !o)}
               style={{
+                flex: 1,
                 display: "flex",
-                justifyContent: "space-between",
                 alignItems: "center",
-                padding: "0 12px 8px 12px",
+                justifyContent: "space-between",
+                padding: 0,
+                background: "transparent",
+                border: "none",
+                color: "var(--text-dim)",
+                cursor: "pointer",
+                textAlign: "left",
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
               }}
             >
-              <span
+              <span>WALKER</span>
+              <span style={{ color: "var(--text-dim)" }}>{walkerOpen ? "−" : "+"}</span>
+            </button>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {walkerOverrideActive && <span style={sectionHeaderBadgeStyle}>Override Active</span>}
+              <span style={{ ...sectionStatusSlotStyle, color: walkerRecomputing ? "#F5A623" : "transparent", minWidth: 96 }}>
+                {walkerRecomputing ? "Recomputing..." : "."}
+              </span>
+              {walkerMaxDepth > 0 && (
+                <span
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 9,
+                    color: "#F5A623",
+                  }}
+                >
+                  D{walkerMaxDepth}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingSection(editingSection === "walker" ? null : "walker");
+                }}
                 style={{
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 9,
-                  letterSpacing: "0.12em",
-                  color: "#4A4D58",
-                  textTransform: "uppercase",
+                  ...overrideEditButtonStyle,
+                  color: overrides["depth_choch"]?.is_active ? "#F5A623" : "var(--border-default)",
                 }}
               >
-                WALKER
-              </span>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                {walkerMaxDepth > 0 && (
-                  <span
-                    style={{
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 9,
-                      color: "#F5A623",
-                    }}
-                  >
-                    D{walkerMaxDepth}
-                  </span>
-                )}
+                {overrides["depth_choch"]?.is_active ? "● EDIT" : "EDIT"}
+              </button>
+              {walkerOverrideActive && (
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setEditingSection(editingSection === "walker" ? null : "walker");
+                    void handleResetSection("walker");
                   }}
+                  disabled={savingOverride || isOverrideRecomputing}
+                  style={{ ...overrideEditButtonStyle, color: "#EF5350" }}
+                >
+                  RESET
+                </button>
+              )}
+            </div>
+          </div>
+          {walkerOpen && (
+            <div>
+              {editingSection === "walker" && (
+                <OverrideForm
+                  overrideType="depth_choch"
+                  existing={overrides["depth_choch"]}
+                  onSave={handleSaveOverride}
+                  onReset={() => handleResetOverride("depth_choch")}
+                  onClose={() => setEditingSection(null)}
+                  saving={savingOverride}
+                />
+              )}
+
+              {walkerWaitingFor && (
+                <div
                   style={{
-                    ...overrideEditButtonStyle,
-                    color: overrides["depth_choch"]?.is_active ? "#F5A623" : "#2A2E39",
+                    padding: "0 12px 8px 12px",
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 9,
+                    color: "var(--text-muted)",
                   }}
                 >
-                  {overrides["depth_choch"]?.is_active ? "● EDIT" : "EDIT"}
-                </button>
-              </div>
-            </div>
+                  {walkerWaitingFor}
+                </div>
+              )}
 
-            {overrides["depth_choch"]?.is_active && (
-              <div style={overrideActiveTagStyle}>● OVERRIDE ACTIVE</div>
-            )}
-            {editingSection === "walker" && (
-              <OverrideForm
-                overrideType="depth_choch"
-                existing={overrides["depth_choch"]}
-                onSave={handleSaveOverride}
-                onReset={() => handleResetOverride("depth_choch")}
-                onClose={() => setEditingSection(null)}
-                saving={savingOverride}
-              />
-            )}
+              {walkerGlobalChoch && (
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    padding: "2px 12px",
+                  }}
+                >
+                  <span style={panelRowLabel}>GLOBAL CHOCH</span>
+                  <span style={panelRowValue}>
+                    {walkerGlobalChoch.lower_boundary.toFixed(5)}
+                    {" \u2013 "}
+                    {walkerGlobalChoch.upper_boundary.toFixed(5)}
+                  </span>
+                </div>
+              )}
 
-            {walkerWaitingFor && (
-              <div
-                style={{
-                  padding: "0 12px 8px 12px",
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 9,
-                  color: "#4A4D58",
-                }}
-              >
-                {walkerWaitingFor}
-              </div>
-            )}
+              {walkerLevelsPanelData.length === 0 ? (
+                <div
+                  style={{
+                    padding: "4px 12px 8px 12px",
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 9,
+                    color: "var(--border-default)",
+                  }}
+                >
+                  NO DEPTH DATA
+                </div>
+              ) : (
+                walkerLevelsPanelData.map((level, idx) => {
+                  const depthColor = WALKER_DEPTH_COLORS[level.depth] ?? "#607D8B";
+                  const zone = level.choch_zone;
+                  const sl = level.structural_level;
+                  const mitigated = level.is_mitigated ?? level.choch_mitigated ?? false;
 
-            {walkerGlobalChoch && (
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  padding: "2px 12px",
-                }}
-              >
-                <span style={panelRowLabel}>GLOBAL CHOCH</span>
-                <span style={panelRowValue}>
-                  {walkerGlobalChoch.lower_boundary.toFixed(5)}
-                  {" \u2013 "}
-                  {walkerGlobalChoch.upper_boundary.toFixed(5)}
-                </span>
-              </div>
-            )}
-
-            {walkerLevelsPanelData.length === 0 ? (
-              <div
-                style={{
-                  padding: "4px 12px 8px 12px",
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 9,
-                  color: "#2A2E39",
-                }}
-              >
-                NO DEPTH DATA
-              </div>
-            ) : (
-              walkerLevelsPanelData.map((level, idx) => {
-                const depthColor = WALKER_DEPTH_COLORS[level.depth] ?? "#607D8B";
-                const zone = level.choch_zone;
-                const sl = level.structural_level;
-                const mitigated = level.is_mitigated ?? level.choch_mitigated ?? false;
-
-                return (
-                  <div
-                    key={idx}
-                    style={{
-                      borderLeft: `2px solid ${depthColor}40`,
-                      margin: "4px 8px",
-                      padding: "4px 8px",
-                      background: `${depthColor}08`,
-                      borderRadius: 2,
-                    }}
-                  >
+                  return (
                     <div
+                      key={idx}
                       style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        marginBottom: 4,
+                        borderLeft: `2px solid ${depthColor}40`,
+                        margin: "4px 8px",
+                        padding: "4px 8px",
+                        background: `${depthColor}08`,
+                        borderRadius: 2,
                       }}
                     >
-                      <span
+                      <div
                         style={{
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 9,
-                          color: depthColor,
-                          letterSpacing: "0.08em",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          marginBottom: 4,
                         }}
                       >
-                        DEPTH {level.depth}
-                      </span>
-                      <span
-                        style={{
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 9,
-                          color: mitigated ? "#4CAF50" : "#EF5350",
-                        }}
-                      >
-                        {mitigated ? "MITIGATED" : "ACTIVE"}
-                      </span>
+                        <span
+                          style={{
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 9,
+                            color: depthColor,
+                            letterSpacing: "0.08em",
+                          }}
+                        >
+                          DEPTH {level.depth}
+                        </span>
+                        <span
+                          style={{
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 9,
+                            color: mitigated ? "#4CAF50" : "#EF5350",
+                          }}
+                        >
+                          {mitigated ? "MITIGATED" : "ACTIVE"}
+                        </span>
+                      </div>
+
+                      {zone && (
+                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                          <span style={panelRowLabel}>CHOCH ZONE</span>
+                          <span style={{ ...panelRowValue, color: depthColor }}>
+                            {zone.lower_boundary.toFixed(5)}
+                            {" \u2013 "}
+                            {zone.upper_boundary.toFixed(5)}
+                          </span>
+                        </div>
+                      )}
+
+                      {sl?.price != null && (
+                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                          <span style={panelRowLabel}>BOS</span>
+                          <span style={panelRowValue}>
+                            {sl.price.toFixed(5)}
+                            {sl.classification ? ` (${sl.classification})` : ""}
+                          </span>
+                        </div>
+                      )}
+
+                      {level.termination_reason && (
+                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                          <span style={panelRowLabel}>REASON</span>
+                          <span style={{ ...panelRowValue, color: "var(--text-muted)" }}>
+                            {level.termination_reason}
+                          </span>
+                        </div>
+                      )}
                     </div>
-
-                    {zone && (
-                      <div style={{ display: "flex", justifyContent: "space-between" }}>
-                        <span style={panelRowLabel}>CHOCH ZONE</span>
-                        <span style={{ ...panelRowValue, color: depthColor }}>
-                          {zone.lower_boundary.toFixed(5)}
-                          {" \u2013 "}
-                          {zone.upper_boundary.toFixed(5)}
-                        </span>
-                      </div>
-                    )}
-
-                    {sl?.price != null && (
-                      <div style={{ display: "flex", justifyContent: "space-between" }}>
-                        <span style={panelRowLabel}>BOS</span>
-                        <span style={panelRowValue}>
-                          {sl.price.toFixed(5)}
-                          {sl.classification ? ` (${sl.classification})` : ""}
-                        </span>
-                      </div>
-                    )}
-
-                    {level.termination_reason && (
-                      <div style={{ display: "flex", justifyContent: "space-between" }}>
-                        <span style={panelRowLabel}>REASON</span>
-                        <span style={{ ...panelRowValue, color: "#4A4D58" }}>
-                          {level.termination_reason}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
+                  );
+                })
+              )}
+            </div>
+          )}
         </section>
 
         <section
           style={{
-            border: "1px solid #2A2E39",
-            background: "#0E1014",
+            border: "1px solid var(--border-default)",
+            background: "var(--bg-base)",
             padding: 0,
             fontFamily: '"IBM Plex Mono", monospace',
             fontSize: 10,
@@ -2094,7 +2436,7 @@ export function MarketCockpit({
                 padding: 0,
                 background: "transparent",
                 border: "none",
-                color: "#787B86",
+                color: "var(--text-dim)",
                 cursor: "pointer",
                 textAlign: "left",
                 letterSpacing: "0.1em",
@@ -2102,8 +2444,12 @@ export function MarketCockpit({
               }}
             >
               <span>CANDIDATE IMPULSE</span>
-              <span style={{ color: "#434651" }}>{candidateImpulseOpen ? "−" : "+"}</span>
+              <span style={{ color: "var(--text-dim)" }}>{candidateImpulseOpen ? "−" : "+"}</span>
             </button>
+            {candidateOverrideActive && <span style={sectionHeaderBadgeStyle}>Override Active</span>}
+            <span style={{ ...sectionStatusSlotStyle, color: candidateRecomputing ? "#F5A623" : "transparent" }}>
+              {candidateRecomputing ? "Recomputing..." : "."}
+            </span>
             <button
               type="button"
               onClick={(e) => {
@@ -2112,15 +2458,25 @@ export function MarketCockpit({
               }}
               style={{
                 ...overrideEditButtonStyle,
-                color: overrides["candidate_choch"]?.is_active ? "#F5A623" : "#2A2E39",
+                color: overrides["candidate_choch"]?.is_active ? "#F5A623" : "var(--border-default)",
               }}
             >
               {overrides["candidate_choch"]?.is_active ? "● EDIT" : "EDIT"}
             </button>
+            {candidateOverrideActive && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleResetSection("candidate");
+                }}
+                disabled={savingOverride || isOverrideRecomputing}
+                style={{ ...overrideEditButtonStyle, color: "#EF5350" }}
+              >
+                RESET
+              </button>
+            )}
           </div>
-          {overrides["candidate_choch"]?.is_active && (
-            <div style={overrideActiveTagStyle}>● OVERRIDE ACTIVE</div>
-          )}
           {editingSection === "candidate_impulse" && (
             <OverrideForm
               overrideType="candidate_choch"
@@ -2134,7 +2490,7 @@ export function MarketCockpit({
           {candidateImpulseOpen && (
             <div
               style={{
-                borderTop: "1px solid #2A2E39",
+                borderTop: "1px solid var(--border-default)",
                 padding: "10px 12px 12px",
                 display: "grid",
                 gap: 8,
@@ -2180,15 +2536,15 @@ export function MarketCockpit({
         {candidateMove !== null && (
           <section
             style={{
-              border: "1px solid #2A2E39",
-              background: "#0E1014",
+              border: "1px solid var(--border-default)",
+              background: "var(--bg-base)",
               padding: 0,
               fontFamily: '"IBM Plex Mono", monospace',
             }}
           >
             <div
               style={{
-                borderTop: "1px solid #1E222D",
+                borderTop: "1px solid var(--bg-elevated)",
                 padding: "12px 0 4px 0",
               }}
             >
@@ -2205,13 +2561,17 @@ export function MarketCockpit({
                     fontFamily: "'IBM Plex Mono', monospace",
                     fontSize: 9,
                     letterSpacing: "0.12em",
-                    color: "#4A4D58",
+                    color: "var(--text-muted)",
                     textTransform: "uppercase",
                   }}
                 >
                   CANDIDATE WALKER
                 </span>
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  {overrides["candidate_ichoch"]?.is_active && <span style={sectionHeaderBadgeStyle}>Override Active</span>}
+                  <span style={{ ...sectionStatusSlotStyle, color: candidateRecomputing ? "#F5A623" : "transparent", minWidth: 96 }}>
+                    {candidateRecomputing ? "Recomputing..." : "."}
+                  </span>
                   {candidateWalkerDepth > 0 && (
                     <span
                       style={{
@@ -2231,17 +2591,26 @@ export function MarketCockpit({
                     }}
                     style={{
                       ...overrideEditButtonStyle,
-                      color: overrides["candidate_ichoch"]?.is_active ? "#F5A623" : "#2A2E39",
+                      color: overrides["candidate_ichoch"]?.is_active ? "#F5A623" : "var(--border-default)",
                     }}
                   >
                     {overrides["candidate_ichoch"]?.is_active ? "● EDIT" : "EDIT"}
                   </button>
+                  {overrides["candidate_ichoch"]?.is_active && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleResetOverride("candidate_ichoch");
+                      }}
+                      disabled={savingOverride || isOverrideRecomputing}
+                      style={{ ...overrideEditButtonStyle, color: "#EF5350" }}
+                    >
+                      RESET
+                    </button>
+                  )}
                 </div>
               </div>
-
-              {overrides["candidate_ichoch"]?.is_active && (
-                <div style={overrideActiveTagStyle}>● OVERRIDE ACTIVE</div>
-              )}
               {editingSection === "candidate_walker" && (
                 <OverrideForm
                   overrideType="candidate_ichoch"
@@ -2259,7 +2628,7 @@ export function MarketCockpit({
                     padding: "0 12px 8px 12px",
                     fontFamily: "'IBM Plex Mono', monospace",
                     fontSize: 9,
-                    color: "#4A4D58",
+                    color: "var(--text-muted)",
                   }}
                 >
                   {candidateWalkerWaiting}
@@ -2289,7 +2658,7 @@ export function MarketCockpit({
                     padding: "4px 12px 8px 12px",
                     fontFamily: "'IBM Plex Mono', monospace",
                     fontSize: 9,
-                    color: "#2A2E39",
+                    color: "var(--border-default)",
                   }}
                 >
                   NO CANDIDATE DEPTH DATA
@@ -2364,7 +2733,7 @@ export function MarketCockpit({
                       {level.termination_reason && (
                         <div style={{ display: "flex", justifyContent: "space-between" }}>
                           <span style={panelRowLabel}>REASON</span>
-                          <span style={{ ...panelRowValue, color: "#4A4D58" }}>
+                          <span style={{ ...panelRowValue, color: "var(--text-muted)" }}>
                             {level.termination_reason}
                           </span>
                         </div>
@@ -2379,8 +2748,8 @@ export function MarketCockpit({
 
         <section
           style={{
-            border: "1px dashed #363A45",
-            background: "#0B0D11",
+            border: "1px dashed var(--border-strong)",
+            background: "var(--bg-base)",
             padding: 0,
             fontFamily: '"IBM Plex Mono", monospace',
             fontSize: 10,
@@ -2397,7 +2766,7 @@ export function MarketCockpit({
               padding: "10px 12px",
               background: "transparent",
               border: "none",
-              color: "#787B86",
+              color: "var(--text-dim)",
               cursor: "pointer",
               textAlign: "left",
               letterSpacing: "0.1em",
@@ -2419,14 +2788,14 @@ export function MarketCockpit({
               </span>
               <span>Developer tools</span>
             </span>
-            <span style={{ color: "#434651" }}>{devOpen ? "\u2212" : "+"}</span>
+            <span style={{ color: "var(--text-dim)" }}>{devOpen ? "\u2212" : "+"}</span>
           </button>
           {devOpen && (
-            <div style={{ borderTop: "1px dashed #363A45", padding: "10px 12px 12px", display: "grid", gap: 10 }}>
+            <div style={{ borderTop: "1px dashed var(--border-strong)", padding: "10px 12px 12px", display: "grid", gap: 10 }}>
         <section
           style={{
-            border: "1px solid #2A2E39",
-            background: "#0E1014",
+            border: "1px solid var(--border-default)",
+            background: "var(--bg-base)",
             padding: 0,
             fontFamily: '"IBM Plex Mono", monospace',
             fontSize: 10,
@@ -2443,7 +2812,7 @@ export function MarketCockpit({
               padding: "10px 12px",
               background: "transparent",
               border: "none",
-              color: "#787B86",
+              color: "var(--text-dim)",
               cursor: "pointer",
               textAlign: "left",
               letterSpacing: "0.1em",
@@ -2451,19 +2820,19 @@ export function MarketCockpit({
             }}
           >
             <span>TREND DETECTION</span>
-            <span style={{ color: "#434651" }}>{analysisParamsOpen ? "−" : "+"}</span>
+            <span style={{ color: "var(--text-dim)" }}>{analysisParamsOpen ? "−" : "+"}</span>
           </button>
           {analysisParamsOpen && (
             <div
               style={{
-                borderTop: "1px solid #2A2E39",
+                borderTop: "1px solid var(--border-default)",
                 padding: "10px 12px 12px",
                 display: "grid",
                 gap: 10,
                 color: "#9CA3AF",
               }}
             >
-              <div style={{ fontSize: 9, color: "#434651", lineHeight: 1.4 }}>
+              <div style={{ fontSize: 9, color: "var(--text-dim)", lineHeight: 1.4 }}>
                 Fine-tune how the system identifies trend structure for this market. Changes apply immediately and are saved for this market only.
               </div>
               <div style={{ display: "grid", gap: 10 }}>
@@ -2471,8 +2840,8 @@ export function MarketCockpit({
                   style={{
                     display: "grid",
                     gap: 8,
-                    border: "1px solid #2A2E39",
-                    background: "#111318",
+                    border: "1px solid var(--border-default)",
+                    background: "var(--bg-surface)",
                     padding: 10,
                   }}
                 >
@@ -2493,9 +2862,9 @@ export function MarketCockpit({
                       style={{
                         ...trendToggleButtonBase,
                         fontWeight: coreDraft.use_parent_relative_filter ? 700 : 400,
-                        border: `1px solid ${coreDraft.use_parent_relative_filter ? "#F5A623" : "#363A45"}`,
-                        background: coreDraft.use_parent_relative_filter ? "#F5A623" : "#1E222D",
-                        color: coreDraft.use_parent_relative_filter ? "#0D0F14" : "#787B86",
+                        border: `1px solid ${coreDraft.use_parent_relative_filter ? "#F5A623" : "var(--border-strong)"}`,
+                        background: coreDraft.use_parent_relative_filter ? "#F5A623" : "var(--bg-elevated)",
+                        color: coreDraft.use_parent_relative_filter ? "var(--bg-base)" : "var(--text-dim)",
                       }}
                     >
                       {coreDraft.use_parent_relative_filter ? "On" : "Off"}
@@ -2527,8 +2896,8 @@ export function MarketCockpit({
                   style={{
                     display: "grid",
                     gap: 8,
-                    border: "1px solid #2A2E39",
-                    background: "#111318",
+                    border: "1px solid var(--border-default)",
+                    background: "var(--bg-surface)",
                     padding: 10,
                   }}
                 >
@@ -2549,9 +2918,9 @@ export function MarketCockpit({
                       style={{
                         ...trendToggleButtonBase,
                         fontWeight: coreDraft.use_momentum_filter ? 700 : 400,
-                        border: `1px solid ${coreDraft.use_momentum_filter ? "#F5A623" : "#363A45"}`,
-                        background: coreDraft.use_momentum_filter ? "#F5A623" : "#1E222D",
-                        color: coreDraft.use_momentum_filter ? "#0D0F14" : "#787B86",
+                        border: `1px solid ${coreDraft.use_momentum_filter ? "#F5A623" : "var(--border-strong)"}`,
+                        background: coreDraft.use_momentum_filter ? "#F5A623" : "var(--bg-elevated)",
+                        color: coreDraft.use_momentum_filter ? "var(--bg-base)" : "var(--text-dim)",
                       }}
                     >
                       {coreDraft.use_momentum_filter ? "On" : "Off"}
@@ -2583,8 +2952,8 @@ export function MarketCockpit({
                   style={{
                     display: "grid",
                     gap: 8,
-                    border: "1px solid #2A2E39",
-                    background: "#111318",
+                    border: "1px solid var(--border-default)",
+                    background: "var(--bg-surface)",
                     padding: 10,
                   }}
                 >
@@ -2605,9 +2974,9 @@ export function MarketCockpit({
                       style={{
                         ...trendToggleButtonBase,
                         fontWeight: coreDraft.use_dominance_filter ? 700 : 400,
-                        border: `1px solid ${coreDraft.use_dominance_filter ? "#F5A623" : "#363A45"}`,
-                        background: coreDraft.use_dominance_filter ? "#F5A623" : "#1E222D",
-                        color: coreDraft.use_dominance_filter ? "#0D0F14" : "#787B86",
+                        border: `1px solid ${coreDraft.use_dominance_filter ? "#F5A623" : "var(--border-strong)"}`,
+                        background: coreDraft.use_dominance_filter ? "#F5A623" : "var(--bg-elevated)",
+                        color: coreDraft.use_dominance_filter ? "var(--bg-base)" : "var(--text-dim)",
                       }}
                     >
                       {coreDraft.use_dominance_filter ? "On" : "Off"}
@@ -2647,7 +3016,7 @@ export function MarketCockpit({
                     textTransform: "uppercase",
                     background: "#F5A623",
                     border: "1px solid #F5A623",
-                    color: "#0B0D11",
+                    color: "var(--bg-base)",
                     cursor: "pointer",
                     textAlign: "center",
                     fontFamily: '"IBM Plex Mono", monospace',
@@ -2667,9 +3036,9 @@ export function MarketCockpit({
                     fontSize: 10,
                     letterSpacing: "0.08em",
                     textTransform: "uppercase",
-                    background: "#1E222D",
-                    border: "1px solid #363A45",
-                    color: "#D1D4DC",
+                    background: "var(--bg-elevated)",
+                    border: "1px solid var(--border-strong)",
+                    color: "var(--text-primary)",
                     cursor: "pointer",
                     textAlign: "center",
                     fontFamily: '"IBM Plex Mono", monospace',
@@ -2724,8 +3093,8 @@ export function MarketCockpit({
                   padding: "8px 0 0",
                   background: "transparent",
                   border: "none",
-                  borderTop: "1px solid #2A2E39",
-                  color: "#434651",
+                  borderTop: "1px solid var(--border-default)",
+                  color: "var(--text-dim)",
                   cursor: "pointer",
                   fontSize: 9,
                   letterSpacing: "0.08em",
@@ -2738,12 +3107,12 @@ export function MarketCockpit({
               </button>
               {advancedOverridesOpen && (
                 <div style={{ display: "grid", gap: 10, paddingTop: 8 }}>
-                  <div style={{ fontSize: 9, color: "#434651", lineHeight: 1.4 }}>
+                  <div style={{ fontSize: 9, color: "var(--text-dim)", lineHeight: 1.4 }}>
                     Changing a value refetches overlays immediately (candles unchanged).
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                     <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      <span style={{ fontSize: 9, color: "#434651" }}>max_walk_depth (omit if empty)</span>
+                      <span style={{ fontSize: 9, color: "var(--text-dim)" }}>max_walk_depth (omit if empty)</span>
                       <input
                         type="number"
                         step={1}
@@ -2764,7 +3133,7 @@ export function MarketCockpit({
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                     <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      <span style={{ fontSize: 9, color: "#434651" }}>min_swing_candles (optional)</span>
+                      <span style={{ fontSize: 9, color: "var(--text-dim)" }}>min_swing_candles (optional)</span>
                       <input
                         type="number"
                         step={1}
@@ -2783,7 +3152,7 @@ export function MarketCockpit({
                       />
                     </label>
                     <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      <span style={{ fontSize: 9, color: "#434651" }}>trend_confirmation_pct (optional)</span>
+                      <span style={{ fontSize: 9, color: "var(--text-dim)" }}>trend_confirmation_pct (optional)</span>
                       <input
                         type="number"
                         step={0.001}
@@ -2802,7 +3171,7 @@ export function MarketCockpit({
                       />
                     </label>
                   </div>
-                  <div style={{ fontSize: 9, color: "#434651", letterSpacing: "0.06em" }}>RMT subtree (optional)</div>
+                  <div style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.06em" }}>RMT subtree (optional)</div>
                   <div style={{ display: "grid", gap: 8 }}>
                     {(
                       [
@@ -2845,7 +3214,7 @@ export function MarketCockpit({
                       ] as const
                     ).map(([key, label]) => (
                       <label key={key} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        <span style={{ fontSize: 8, color: "#434651" }}>{label}</span>
+                        <span style={{ fontSize: 8, color: "var(--text-dim)" }}>{label}</span>
                         <input
                           type="number"
                           step={0.01}
@@ -2879,3 +3248,4 @@ export function MarketCockpit({
   </>
   );
 }
+

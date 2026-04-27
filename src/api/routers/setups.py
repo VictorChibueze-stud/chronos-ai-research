@@ -31,8 +31,10 @@ from src.core.structural_walker import serialize_state_report, walk_structure
 from src.core.features import compute_ema
 from src.core.trend_id import compute_internal_structure, identify_trend
 from src.api.universe_readiness import build_readiness_index, merge_readiness_fields
+from src.analysis.recompute_orchestrator import recompute_full_chain_for_symbol
 from src.db.models import (
     ActiveUniverseSymbol,
+    CandidateImpulseCache,
     GlobalStructureCache,
     MonitoredSetup,
     ScanSettings,
@@ -45,10 +47,6 @@ from src.db.models import (
 from src.cache.candle_store import refresh_candles
 from src.scanner.global_structure import (
     compute_and_write_market_state,
-    compute_candidate_impulse_for_symbol,
-    compute_global_structure_for_symbol,
-    compute_prime_impulse_structure,
-    compute_walker_for_symbol,
     get_stored_candidate_impulse,
     get_stored_global_structure,
     upsert_stored_walker_result,
@@ -64,6 +62,8 @@ from src.scanner.market_scanner import (
 from src.scanner.universe import compute_correlation_groups
 
 logger = logging.getLogger(__name__)
+_STAGE2_MAX_CONCURRENT = 5
+_stage2_semaphore = threading.Semaphore(_STAGE2_MAX_CONCURRENT)
 
 _TF_WINDOWS_PATH = Path(__file__).parent.parent.parent.parent / "config" / "timeframe_windows.yaml"
 with _TF_WINDOWS_PATH.open() as _f:
@@ -279,7 +279,8 @@ ALLOWED_DERIV_CATEGORIES = {
     "equities",
 }
 
-MONITORED_CAPACITY = 50
+MONITORED_CAPACITY = 50  # LEGACY — only used as fallback when universe is
+# unknown. All new code must use _get_universe_capacity.
 CATEGORY_MIN_SLOT_KEYS = (
     "forex", "commodity", "indices",
     "synthetic", "crypto", "equities",
@@ -347,6 +348,7 @@ class ScanSettingsPayload(BaseModel):
     active_refresh_hours: int = Field(default=4)
     deep_analysis_refresh_hours: int = Field(default=24)
     non_top50_analysis_depth: str = Field(default="global_and_prime")
+    category_min_slots: dict | None = None
 
 
 class ScanRequest(BaseModel):
@@ -521,7 +523,7 @@ def _normalize_scan_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
             v = int(raw_mins.get(k, DEFAULT_CATEGORY_MIN_SLOTS[k]))
         except (TypeError, ValueError):
             v = int(DEFAULT_CATEGORY_MIN_SLOTS[k])
-        slot_out[k] = max(0, min(MONITORED_CAPACITY, v))
+        slot_out[k] = max(0, min(250, v))
     sum_non_crypto = sum(slot_out[k] for k in CATEGORY_MIN_SLOT_KEYS if k != "crypto")
     if sum_non_crypto > MONITORED_CAPACITY:
         # Scale down non-crypto mins proportionally so the sum fits in capacity (crypto min stays as-is).
@@ -564,9 +566,16 @@ def _get_effective_scan_settings(db: Session) -> dict[str, Any]:
 
 
 def _save_scan_settings(db: Session, payload: ScanSettingsPayload) -> dict[str, Any]:
-    normalized = _normalize_scan_settings(payload.model_dump())
-    now = datetime.now(timezone.utc)
     row = db.query(ScanSettings).filter(ScanSettings.scope == "global").one_or_none()
+    payload_data = payload.model_dump()
+    if payload_data.get("category_min_slots") is None:
+        if row is not None and isinstance(row.settings_json, dict) and "category_min_slots" in row.settings_json:
+            payload_data["category_min_slots"] = row.settings_json["category_min_slots"]
+        else:
+            payload_data.pop("category_min_slots", None)
+
+    normalized = _normalize_scan_settings(payload_data)
+    now = datetime.now(timezone.utc)
     if row is None:
         row = ScanSettings(scope="global", settings_json=normalized, updated_at=now)
         db.add(row)
@@ -919,6 +928,7 @@ def _serialize_setup(setup: MonitoredSetup) -> dict[str, Any]:
         "last_checked_at": setup.last_checked_at.isoformat() if setup.last_checked_at else None,
         "created_at": setup.created_at.isoformat() if setup.created_at else None,
         "market_state": setup.market_state or "WAITING",
+        "is_monitored": True,
     }
 
 
@@ -936,24 +946,89 @@ def _serialize_placeholder_setup(symbol: str, timeframe: str = "1h") -> dict[str
         "universe": _infer_universe(symbol),
         "timeframe": timeframe,
         "trend": "range",
-        "current_phase": "range",
-        "fsm_state": "UNSCANNED",
+        "current_phase": None,
+        "fsm_state": "WAITING",
+        "market_state": None,
         "ema_signal": "WAITING",
         "trend_score": 0.0,
         "pullback_depth": 0,
         "total_mitigation_count": 0,
-        "waiting_for": "Awaiting scan data",
+        "waiting_for": "",
         "active_choch_zone": None,
         "active_bos": None,
         "active_zones": [],
         "mtf_alignment": {},
         "structural_state": {},
         "structural_state_json": {},
-        "score_components": {},
+        "score_components": None,
         "last_checked_at": now_iso,
         "created_at": None,
         "universe_rank": None,
+        "is_monitored": False,
     }
+
+
+def _enrich_placeholder_from_cached_state(
+    placeholder: dict[str, Any],
+    symbol: str,
+    db: Session,
+) -> dict[str, Any]:
+    """Best-effort enrichment for unmonitored symbols from cached analysis tables."""
+    sym = symbol.strip().upper()
+
+    gsc = (
+        db.query(GlobalStructureCache)
+        .filter(GlobalStructureCache.symbol == sym)
+        .one_or_none()
+    )
+    if gsc is not None:
+        trend = (gsc.trend_direction or "").strip().lower()
+        if trend in {"up", "down", "range"}:
+            placeholder["trend"] = trend
+        if gsc.market_state:
+            placeholder["market_state"] = gsc.market_state
+        if gsc.computed_at is not None:
+            placeholder["last_checked_at"] = gsc.computed_at.isoformat()
+        if gsc.legs_json:
+            placeholder["structural_state_json"] = {
+                "legs": gsc.legs_json,
+            }
+            placeholder["structural_state"] = placeholder["structural_state_json"]
+
+    us = (
+        db.query(UniverseScore)
+        .filter(UniverseScore.symbol == sym)
+        .one_or_none()
+    )
+    if us is not None:
+        placeholder["universe_rank"] = us.universe_rank
+        placeholder["trend_score"] = float(us.total_score or 0.0)
+
+    cic = (
+        db.query(CandidateImpulseCache)
+        .filter(CandidateImpulseCache.symbol == sym)
+        .one_or_none()
+    )
+    if cic is not None:
+        if placeholder.get("market_state") is None:
+            placeholder["market_state"] = "CANDIDATE_ACTIVE"
+        placeholder["fsm_state"] = "CANDIDATE_ACTIVE"
+        if isinstance(cic.candidate_walker_json, dict):
+            placeholder["structural_state_json"] = cic.candidate_walker_json
+            placeholder["structural_state"] = cic.candidate_walker_json
+            placeholder["pullback_depth"] = int(
+                cic.candidate_walker_json.get("max_depth_reached", 0) or 0
+            )
+            placeholder["total_mitigation_count"] = int(
+                cic.candidate_walker_json.get("total_mitigation_count", 0) or 0
+            )
+            placeholder["waiting_for"] = str(
+                cic.candidate_walker_json.get("waiting_for", "") or ""
+            )
+        if cic.computed_at is not None:
+            placeholder["last_checked_at"] = cic.computed_at.isoformat()
+
+    return placeholder
 
 
 def _enrich_with_universe_scores(db: Session, rows: list[dict[str, Any]]) -> None:
@@ -1235,7 +1310,76 @@ def _write_stage1_result(
         )
     db.commit()
     if evict:
-        _evict_to_capacity(db, capacity=MONITORED_CAPACITY)
+        sym_universe = _infer_universe(symbol)
+        _evict_to_capacity(
+            db,
+            capacity=_get_universe_capacity(sym_universe, db),
+            universe=sym_universe,
+        )
+
+
+def _write_score_and_state(
+    setup_row: MonitoredSetup,
+    new_score: float | None,
+    score_components: dict[str, Any] | None,
+    market_state: str | None,
+    db: Session,
+) -> bool:
+    """Atomically persist ``trend_score`` and ``market_state`` together.
+
+    If no score was computed, the helper refuses to write.
+    If market state is unavailable, it writes the score and keeps the
+    existing market_state unchanged.
+
+    Returns ``True`` on successful commit, ``False`` otherwise.
+    """
+    if new_score is None:
+        logger.warning(
+            "_write_score_and_state: no score "
+            "computed for %s — skipping write "
+            "entirely to prevent corruption",
+            setup_row.symbol,
+        )
+        return False
+
+    # market_state can be None — in that case
+    # we write the score but keep the existing
+    # market_state on the row unchanged.
+    # This prevents the score from being stuck
+    # at 0.0 just because state computation failed.
+    if market_state is None:
+        logger.warning(
+            "_write_score_and_state: no market "
+            "state computed for %s — writing score only, "
+            "keeping existing state: %s",
+            setup_row.symbol,
+            setup_row.market_state,
+        )
+
+    now = datetime.now(timezone.utc)
+    try:
+        setup_row.trend_score = new_score
+        # score_components_json is not part of the current ORM model —
+        # the existing pipeline discards ``score_components``. Guard with
+        # ``hasattr`` so the helper picks it up automatically if the
+        # column is ever added.
+        if hasattr(setup_row, "score_components_json"):
+            setup_row.score_components_json = score_components or {}
+        # Only update market_state when computed
+        if market_state is not None:
+            setup_row.market_state = market_state
+        setup_row.last_checked_at = now
+        setup_row.updated_at = now
+        db.commit()
+        return True
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        logger.warning(
+            "_write_score_and_state failed for %s: %s",
+            setup_row.symbol,
+            e,
+        )
+        return False
 
 
 def _record_bootstrap_failure(db: Session, symbol: str, message: str) -> None:
@@ -1344,7 +1488,16 @@ def _bootstrap_stage1_symbol(
     symbol: str,
     timeframe: str = "1h",
 ) -> MonitoredSetup | None:
-    """On-demand stage 1: persist MonitoredSetup or record failure. Does not evict other rows."""
+    """Bootstrap a symbol into monitored_setups.
+
+    Only call this from explicit addition paths (rank universe jobs,
+    manual add via POST /api/setups/monitor/{symbol}).
+    DO NOT call this from browsing/view paths — that would silently
+    inflate the monitored universe on every page view.
+
+    On-demand stage 1: persist MonitoredSetup or record failure.
+    Does not evict other rows.
+    """
     normalized = symbol.strip().upper()
     base_tf_config = _TF_WINDOWS.get("timeframes", {}).get(BASE_FETCH_TIMEFRAME, {})
     base_lookback_days: float = base_tf_config.get("lookback_days", 7.5)
@@ -1768,6 +1921,10 @@ def _run_scan_sync(
     universe_filter: str | None = None,
 ) -> None:
     db = SessionLocal()
+    # Observability hooks — populated throughout the job and flushed
+    # to ScanJobLog in the finally block below.
+    _scan_log_start = datetime.now(timezone.utc)
+    _scan_log_error: str | None = None
     try:
         effective_settings = _normalize_scan_settings(settings or DEFAULT_SCAN_SETTINGS)
         if universe_filter is not None:
@@ -1939,7 +2096,7 @@ def _run_scan_sync(
         universe_capacity = (
             _get_universe_capacity(universe_filter, db)
             if universe_filter is not None
-            else MONITORED_CAPACITY
+            else _get_universe_capacity(universe_filter or "multi_asset", db)
         )
         top50_rows_query = (
             db.query(MonitoredSetup)
@@ -1971,76 +2128,140 @@ def _run_scan_sync(
         now = datetime.now(timezone.utc)
 
         for symbol in top50_symbols:
-            sym_db = SessionLocal()
-            try:
-                # 1. Refresh candles for active timeframes only
-                for tf in ACTIVE_REFRESH_TIMEFRAMES:
-                    try:
-                        refresh_candles(symbol, tf, sym_db)
-                    except Exception as e:
-                        logger.warning("Stage 2 candle refresh %s %s: %s", symbol, tf, e)
-
-                # 2. Staleness check for deep analysis
-                gsc_row = _gsc_batch.get(symbol)
-                needs_deep = gsc_row is None or gsc_row.computed_at is None
-                if not needs_deep:
-                    computed_at_utc = gsc_row.computed_at
-                    if computed_at_utc.tzinfo is None:
-                        computed_at_utc = computed_at_utc.replace(tzinfo=timezone.utc)
-                    needs_deep = (now - computed_at_utc).total_seconds() > deep_refresh_hours * 3600
-
-                if needs_deep:
-                    try:
-                        compute_global_structure_for_symbol(symbol, sym_db)
-                    except Exception as e:
-                        logger.warning("Stage 2 global structure %s: %s", symbol, e)
-                    try:
-                        compute_prime_impulse_structure(symbol, sym_db)
-                    except Exception as e:
-                        logger.warning("Stage 2 prime impulse %s: %s", symbol, e)
-                    try:
-                        compute_walker_for_symbol(symbol, sym_db)
-                    except Exception as e:
-                        logger.warning("Stage 2 walker %s: %s", symbol, e)
-
-                # 3. Always recompute candidate impulse
+            with _stage2_semaphore:
+                sym_db = SessionLocal()
                 try:
-                    compute_candidate_impulse_for_symbol(symbol, sym_db)
-                except Exception as e:
-                    logger.warning("Stage 2 candidate impulse %s: %s", symbol, e)
+                    # 1. Refresh candles for active timeframes only
+                    for tf in ACTIVE_REFRESH_TIMEFRAMES:
+                        try:
+                            refresh_candles(symbol, tf, sym_db)
+                        except Exception as e:
+                            logger.warning("Stage 2 candle refresh %s %s: %s", symbol, tf, e)
 
-                # 4. Always recompute market state
-                try:
-                    compute_and_write_market_state(symbol, sym_db)
-                except Exception as e:
-                    logger.warning("Stage 2 market state %s: %s", symbol, e)
+                    # 2. Staleness check for deep analysis
+                    gsc_row = _gsc_batch.get(symbol)
+                    needs_deep = gsc_row is None or gsc_row.computed_at is None
+                    if not needs_deep:
+                        computed_at_utc = gsc_row.computed_at
+                        if computed_at_utc.tzinfo is None:
+                            computed_at_utc = computed_at_utc.replace(tzinfo=timezone.utc)
+                        needs_deep = (now - computed_at_utc).total_seconds() > deep_refresh_hours * 3600
 
-                # 5. Update trend_score on MonitoredSetup using stored global structure
-                setup_row = _get_setup_by_symbol(sym_db, symbol)
-                gsc_updated = _gsc_batch.get(symbol)
-                if setup_row is not None and gsc_updated is not None:
+                    if needs_deep:
+                        try:
+                            recompute_full_chain_for_symbol(symbol, sym_db, layers=None)
+                        except Exception as e:
+                            logger.warning("Stage 2 full recompute %s: %s", symbol, e)
+                    else:
+                        try:
+                            recompute_full_chain_for_symbol(symbol, sym_db, layers=["candidate"])
+                        except Exception as e:
+                            logger.warning("Stage 2 candidate recompute %s: %s", symbol, e)
+
+                    # 4+5. Atomically compute market_state and trend_score,
+                    # then persist both together via _write_score_and_state.
+                    # Either both values land on the row or neither does — no
+                    # more score=0 / state=CANDIDATE_ACTIVE divergence.
+                    setup_row = _get_setup_by_symbol(sym_db, symbol)
+                    gsc_updated = _gsc_batch.get(symbol)
+
+                    computed_state: str | None = None
+                    computed_score: float | None = None
+                    computed_components: dict[str, Any] = {}
+
                     try:
-                        synthetic_result = {
-                            "legs": gsc_updated.legs_json or [],
-                            "current_phase": setup_row.current_phase,
-                        }
-                        new_score, score_components = _compute_hybrid_trend_score(
-                            synthetic_result, effective_settings, setup_row
+                        from src.scanner.global_structure import (
+                            compute_market_state,
                         )
-                        setup_row.trend_score = new_score
-                        setup_row.last_checked_at = now
-                        setup_row.updated_at = now
-                        sym_db.commit()
-                    except Exception as e:
-                        logger.warning("Stage 2 score update %s: %s", symbol, e)
 
-                _scan_status["stage2_complete"] += 1
-                logger.info("Stage 2 complete: %s", symbol)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Stage 2 failed for %s: %s", symbol, e)
-            finally:
-                sym_db.close()
+                        computed_state = compute_market_state(symbol, sym_db)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            "Market state compute failed %s: %s", symbol, e
+                        )
 
+                    if setup_row is not None and gsc_updated is not None:
+                        try:
+                            # Reflect the just-computed state on the in-memory
+                            # row so _compute_hybrid_trend_score (which reads
+                            # setup_row.market_state) uses the fresh value.
+                            # Not yet persisted — _write_score_and_state
+                            # commits both fields below, or rolls back.
+                            if computed_state is not None:
+                                setup_row.market_state = computed_state
+
+                            synthetic_result = {
+                                "legs": gsc_updated.legs_json or [],
+                                "current_phase": setup_row.current_phase,
+                            }
+                            computed_score, computed_components = (
+                                _compute_hybrid_trend_score(
+                                    synthetic_result,
+                                    effective_settings,
+                                    setup_row,
+                                )
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning(
+                                "Score compute failed %s: %s", symbol, e
+                            )
+
+                    if (
+                        setup_row is not None
+                        and computed_score is not None
+                    ):
+                        _write_score_and_state(
+                            setup_row,
+                            computed_score,
+                            computed_components,
+                            computed_state,
+                            sym_db,
+                        )
+                        # Propagate the new state to GlobalStructureCache and
+                        # log the transition in MarketStateHistory. Failures
+                        # here do not roll back the row write above.
+                        if computed_state is not None:
+                            try:
+                                from src.scanner.global_structure import (
+                                    write_market_state,
+                                )
+
+                                write_market_state(
+                                    symbol,
+                                    computed_state,
+                                    sym_db,
+                                    score=computed_score,
+                                    trend_score=computed_score,
+                                )
+                            except Exception as e:  # noqa: BLE001
+                                logger.warning(
+                                    "write_market_state failed %s: %s", symbol, e
+                                )
+                        # Invalidate the analysis cache so the
+                        # next market view request gets fresh data
+                        # reflecting the updated score and state.
+                        # This closes the gap where the 4-hour
+                        # refresh updated structure but the cache
+                        # still served old analysis for up to 4h.
+                        try:
+                            from src.api.routers.analysis import (
+                                on_structure_updated,
+                            )
+                            on_structure_updated(symbol, sym_db)
+                        except Exception as e:
+                            logger.warning(
+                                "Stage 2: cache invalidation "
+                                "failed for %s: %s", symbol, e
+                            )
+
+                    _scan_status["stage2_complete"] += 1
+                    logger.info("Stage 2 complete: %s", symbol)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Stage 2 failed for %s: %s", symbol, e)
+                finally:
+                    sym_db.close()
+
+        # Stage 3a — correlation filter (allowed to fail without blocking eviction)
         try:
             _scan_status["stage"] = "stage3_correlation"
 
@@ -2085,32 +2306,43 @@ def _run_scan_sync(
                 logger.info(
                     "Stage 3 correlation filter skipped: no Stage 1 candle set available for this scan"
                 )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "Stage 3 correlation failed (continuing to eviction): %s", e
+            )
 
-            # Paper trading engine
-            try:
-                from src.execution.paper_engine import run_paper_engine
+        # Stage 3b — paper engine (allowed to fail without blocking eviction)
+        try:
+            _scan_status["stage"] = "stage3_paper"
+            from src.execution.paper_engine import run_paper_engine
 
-                paper_result = run_paper_engine(
-                    db, universe=universe_filter
+            paper_result = run_paper_engine(
+                db, universe=universe_filter
+            )
+            _scan_status["paper_engine"] = paper_result
+            if paper_result.get("error"):
+                logger.warning(
+                    "Paper engine commit failed: %s",
+                    paper_result["error"],
                 )
-                _scan_status["paper_engine"] = paper_result
-                if paper_result.get("error"):
-                    logger.warning(
-                        "Paper engine commit failed: %s",
-                        paper_result["error"],
-                    )
-                else:
-                    logger.info(
-                        "Paper engine: checked=%d closed_tp=%d "
-                        "closed_sl=%d new_trades=%d",
-                        paper_result["monitor"]["checked"],
-                        paper_result["monitor"]["closed_tp"],
-                        paper_result["monitor"]["closed_sl"],
-                        paper_result["new_trades_opened"],
-                    )
-            except Exception as _pe:
-                logger.warning("Paper engine error: %s", _pe)
+            else:
+                logger.info(
+                    "Paper engine: checked=%d closed_tp=%d "
+                    "closed_sl=%d new_trades=%d",
+                    paper_result["monitor"]["checked"],
+                    paper_result["monitor"]["closed_tp"],
+                    paper_result["monitor"]["closed_sl"],
+                    paper_result["new_trades_opened"],
+                )
+        except Exception as _pe:
+            logger.warning(
+                "Stage 3 paper engine failed (continuing to eviction): %s", _pe
+            )
 
+        # Stage 3c — eviction ALWAYS runs. Must not share a try/except with
+        # correlation or paper engine so a failure there cannot silently skip
+        # capacity enforcement.
+        try:
             _scan_status["stage"] = "stage3_eviction"
             _evict_to_capacity(
                 db,
@@ -2120,16 +2352,56 @@ def _run_scan_sync(
             )
             _scan_status["stage"] = "complete"
         except Exception as e:  # noqa: BLE001
-            logger.warning("Stage 3 correlation/eviction failed: %s", e)
-            _scan_status["stage"] = "failed"
+            logger.warning("Stage 3 eviction failed: %s", e)
+            _scan_status["stage"] = "eviction_failed"
             _scan_status["last_error"] = str(e)
     except Exception as e:  # noqa: BLE001
         logger.exception("Background scan failed: %s", e)
         _scan_status["stage"] = "failed"
         _scan_status["last_error"] = str(e)
+        _scan_log_error = str(e)[:2000]
     finally:
         _scan_status["in_progress"] = False
         _scan_status["completed_at"] = datetime.now(timezone.utc).isoformat()
+        # Write refresh-job result to ScanJobLog using a fresh session
+        # so partially-rolled-back state on `db` never blocks the write.
+        try:
+            from src.scanner.job_log import write_job_log
+
+            log_db = SessionLocal()
+            try:
+                now_utc = datetime.now(timezone.utc)
+                duration = (now_utc - _scan_log_start).total_seconds()
+                stage2_attempted = int(
+                    _scan_status.get("stage2_total") or 0
+                )
+                stage2_completed = int(
+                    _scan_status.get("stage2_complete") or 0
+                )
+                write_job_log(
+                    log_db,
+                    job_type="universe_refresh",
+                    started_at=_scan_log_start,
+                    completed_at=now_utc,
+                    duration_seconds=duration,
+                    # total_symbols = how many were in the
+                    # Stage 2 processing queue (not just
+                    # how many exist in the universe)
+                    total_symbols=stage2_attempted,
+                    success_count=stage2_completed,
+                    failure_count=max(
+                        0, stage2_attempted - stage2_completed
+                    ),
+                    status="failed" if _scan_log_error else "completed",
+                    error_message=_scan_log_error,
+                    universe_name=universe_filter,
+                )
+            finally:
+                log_db.close()
+        except Exception as log_exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to write refresh job log: %s", log_exc
+            )
         db.close()
 
 
@@ -2145,6 +2417,37 @@ def list_setups(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# /api/setups/universe response cache
+# ---------------------------------------------------------------------------
+# Building the full universe payload is expensive (~5-6s) because it rebuilds
+# placeholders across every broker-config symbol and enriches each row with
+# readiness + ranking fields. Cache the serialized list in-process for a few
+# minutes; invalidate on ranking completion so fresh scores surface promptly.
+#
+# NOTE: a separate module-level `_universe_cache` above this block caches the
+# *Binance top-symbols set* and must not be confused with the endpoint cache
+# below — they are orthogonal.
+_universe_endpoint_cache: dict[str, Any] = {
+    "data": None,
+    "built_at": None,
+}
+_universe_endpoint_cache_lock = threading.Lock()
+_UNIVERSE_ENDPOINT_CACHE_TTL_SECONDS = 300
+
+
+def invalidate_universe_cache() -> None:
+    """Drop the cached /api/setups/universe payload.
+
+    Call after ranking / promotions / monitored-setup mutations so the next
+    request rebuilds with fresh data.
+    """
+    with _universe_endpoint_cache_lock:
+        _universe_endpoint_cache["data"] = None
+        _universe_endpoint_cache["built_at"] = None
+    logger.info("universe_cache invalidated")
+
+
 @router.get("/universe")
 def list_setups_universe(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
     """
@@ -2153,7 +2456,24 @@ def list_setups_universe(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
     - top 350 Binance symbols by volume
     Includes placeholders when no monitored setup exists yet.
     Each row includes readiness_state (FULL / PARTIAL / ERROR / UNSCANNED).
+
+    Response is cached in-process for
+    :data:`_UNIVERSE_ENDPOINT_CACHE_TTL_SECONDS` seconds and invalidated by
+    :func:`invalidate_universe_cache` after ranking runs.
     """
+    now = datetime.now(timezone.utc)
+
+    with _universe_endpoint_cache_lock:
+        cached_data = _universe_endpoint_cache["data"]
+        built_at = _universe_endpoint_cache["built_at"]
+
+    if (
+        cached_data is not None
+        and built_at is not None
+        and (now - built_at).total_seconds() < _UNIVERSE_ENDPOINT_CACHE_TTL_SECONDS
+    ):
+        return cached_data
+
     setup_rows = (
         db.query(MonitoredSetup)
         .order_by(MonitoredSetup.symbol.asc(), MonitoredSetup.trend_score.desc(), MonitoredSetup.id.asc())
@@ -2220,6 +2540,11 @@ def list_setups_universe(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
         )
     )
     _enrich_with_universe_scores(db, payload)
+
+    with _universe_endpoint_cache_lock:
+        _universe_endpoint_cache["data"] = payload
+        _universe_endpoint_cache["built_at"] = now
+
     return payload
 
 
@@ -2395,20 +2720,17 @@ def get_setup(symbol: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     normalized = symbol.strip().upper()
     setup = _get_setup_by_symbol(db, normalized)
     if setup is None:
-        setup = _bootstrap_stage1_symbol(db, normalized, "1h")
-    if setup is None:
-        placeholder = _serialize_placeholder_setup(normalized)
+        # Unmonitored symbol: return a read-only placeholder built from
+        # whatever cached analysis is already available. We deliberately
+        # do NOT bootstrap a MonitoredSetup row here — browsing must not
+        # mutate the monitored universe. Use POST /api/setups/monitor/{symbol}
+        # to add a symbol explicitly.
+        placeholder = _serialize_placeholder_setup(normalized, timeframe="1d")
+        placeholder = _enrich_placeholder_from_cached_state(
+            placeholder, normalized, db
+        )
         idx = build_readiness_index(db, [normalized]).get(normalized, {})
         merge_readiness_fields(placeholder, idx)
-        fail = (
-            db.query(UniverseBootstrapFailure)
-            .filter(UniverseBootstrapFailure.symbol == normalized)
-            .one_or_none()
-        )
-        placeholder["readiness_error"] = (
-            (fail.error_message or "Bootstrap failed") if fail else "Bootstrap failed"
-        )
-        placeholder["readiness_state"] = "ERROR"
         _enrich_with_universe_scores(db, [placeholder])
         return placeholder
     row = _serialize_setup(setup)
@@ -2425,6 +2747,59 @@ def delete_setup(symbol: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     db.delete(setup)
     db.commit()
     return {"deleted": True, "symbol": symbol}
+
+
+@router.post("/monitor/{symbol}")
+def add_to_monitoring(
+    symbol: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Explicitly add a symbol to monitored_setups.
+
+    This is the ONLY request path that may create a new MonitoredSetup
+    row outside of rank universe jobs. Browsing via GET /api/setups/{symbol}
+    does not bootstrap rows — callers must opt in through this endpoint.
+    """
+    sym = symbol.strip().upper()
+
+    existing = (
+        db.query(MonitoredSetup)
+        .filter(MonitoredSetup.symbol == sym)
+        .first()
+    )
+    if existing is not None:
+        return {
+            "status": "already_monitored",
+            "symbol": sym,
+        }
+
+    universe = _infer_universe(sym)
+    cap = _get_universe_capacity(universe, db)
+    current_count = (
+        db.query(MonitoredSetup)
+        .filter(MonitoredSetup.universe == universe)
+        .count()
+    )
+    if current_count >= cap:
+        return {
+            "status": "at_capacity",
+            "symbol": sym,
+            "universe": universe,
+            "capacity": cap,
+            "current": current_count,
+        }
+
+    result = _bootstrap_stage1_symbol(db, sym, "1h")
+    if result is None:
+        return {
+            "status": "bootstrap_failed",
+            "symbol": sym,
+        }
+    return {
+        "status": "added",
+        "symbol": sym,
+        "universe": universe,
+    }
 
 
 @router.post("/scan")
@@ -2455,7 +2830,37 @@ async def scan_setup(request: ScanRequest) -> dict[str, Any]:
     _scan_status["paper_engine"] = None
 
     request_copy = ScanRequest(**request.model_dump())
-    worker = threading.Thread(target=_run_scan_sync, args=(request_copy, effective_settings), daemon=True)
+
+    def _run_scan_then_cleanup() -> None:
+        try:
+            _run_scan_sync(request_copy, effective_settings)
+        finally:
+            # Manual scan: enforce per-universe capacity since _run_scan_sync
+            # with universe_filter=None may use the legacy global cap.
+            db_cleanup = SessionLocal()
+            try:
+                us_rows = (
+                    db_cleanup.query(UniverseSettings)
+                    .filter(UniverseSettings.is_active == True)  # noqa: E712
+                    .all()
+                )
+                for us in us_rows:
+                    _evict_to_capacity(
+                        db_cleanup,
+                        capacity=us.capacity,
+                        universe=us.universe_name,
+                    )
+                logger.info(
+                    "Manual scan: per-universe eviction complete"
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "Manual scan per-universe eviction failed: %s", e
+                )
+            finally:
+                db_cleanup.close()
+
+    worker = threading.Thread(target=_run_scan_then_cleanup, daemon=True)
     worker.start()
 
     return {

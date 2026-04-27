@@ -71,28 +71,75 @@ def get_market_events(symbol: str, db: Session = Depends(get_db)):
 
 
 @router.get("/news/{symbol}")
-def get_market_news(symbol: str, db: Session = Depends(get_db)):
+def get_market_news(
+    symbol: str,
+    db: Session = Depends(get_db),
+):
     """
-    Get recent news articles tagged with the symbol, ordered by recency.
+    Returns LLM-generated story clusters for a market. Falls back
+    to raw articles if LLM analysis has not run yet.
     """
-    articles = (
-        db.query(NewsArticle)
-        .filter(cast(NewsArticle.market_tags, String).contains(symbol))
-        .order_by(NewsArticle.published_at.desc())
-        .limit(5)
-        .all()
+    from src.fundamentals.models import FundamentalStory, NewsArticle
+
+    sym = symbol.strip().upper()
+
+    # Try LLM stories first.
+    story = (
+        db.query(FundamentalStory)
+        .filter(FundamentalStory.symbol == sym)
+        .first()
     )
 
+    if story is not None:
+        payload = story.stories_json or {}
+        return {
+            "symbol": sym,
+            "mode": "llm_stories",
+            "critical_veto_flag": story.critical_veto_flag,
+            "veto_reason": story.veto_reason,
+            "risk_summary": payload.get("risk_summary", ""),
+            "analyzed_at": (
+                story.analyzed_at.isoformat()
+                if story.analyzed_at
+                else None
+            ),
+            "prime_impulse_start": (
+                story.prime_impulse_start.isoformat()
+                if story.prime_impulse_start
+                else None
+            ),
+            "stories": payload.get("stories", []),
+            "upcoming_events": payload.get("upcoming_events", []),
+            "article_count": payload.get("article_count", 0),
+        }
+
+    # Fallback: return raw articles with legacy sentiment labels.
+    # NOTE: market_tags is stored as JSON (not JSONB); the cast-to-text
+    # + .contains pattern matches the existing working query.
+    articles = (
+        db.query(NewsArticle)
+        .filter(cast(NewsArticle.market_tags, String).contains(sym))
+        .order_by(NewsArticle.published_at.desc())
+        .limit(20)
+        .all()
+    )
     return {
-        "symbol": symbol,
+        "symbol": sym,
+        "mode": "raw_articles",
+        "critical_veto_flag": False,
+        "veto_reason": None,
+        "risk_summary": None,
+        "analyzed_at": None,
+        "prime_impulse_start": None,
+        "stories": [],
+        "upcoming_events": [],
         "articles": [
             {
                 "headline": a.headline,
                 "source_name": a.source_name,
                 "published_at": a.published_at.isoformat(),
-                "sentiment_label": a.sentiment_label,
-                "sentiment_score": a.sentiment_score,
                 "url": a.url,
+                "sentiment_label": a.sentiment_label,
             }
             for a in articles
         ],

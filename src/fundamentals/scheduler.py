@@ -7,6 +7,7 @@ def register_fundamentals_jobs(scheduler) -> None:
     Register all fundamentals background jobs onto the existing APScheduler instance.
     Call this from src/api/main.py in the same block where other jobs are registered.
     """
+    from src.fundamentals.llm.processor import run_fundamentals_intelligence
 
     # Economic calendar refresh — daily at 06:00 UTC
     scheduler.add_job(
@@ -41,4 +42,17 @@ def register_fundamentals_jobs(scheduler) -> None:
         id="fundamentals_news_check_hourly",
         replace_existing=True,
         misfire_grace_time=300,
+    )
+
+    # LLM news intelligence — daily at 07:00 UTC
+    # Runs after calendar refresh (06:00) and the hourly news check.
+    scheduler.add_job(
+        run_fundamentals_intelligence,
+        trigger="cron",
+        hour=7,
+        minute=0,
+        timezone="UTC",
+        id="fundamentals_llm_intelligence_daily",
+        replace_existing=True,
+        misfire_grace_time=600,
     )

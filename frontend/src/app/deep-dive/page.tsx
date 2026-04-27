@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -119,13 +119,13 @@ function DeepDiveContent() {
   const scoreForRing = analysisQuery.isLoading ? 0 : score;
 
   return (
-    <div className="h-full flex overflow-hidden bg-[#131722] text-[#D1D4DC]">
-      <section className="flex-1 flex flex-col overflow-hidden border-r border-[#2A2E39] bg-[#131722]">
-        <div className="h-14 border-b border-[#2A2E39] px-4 flex items-center gap-2">
+    <div className="h-full flex overflow-hidden bg-background-base text-text-primary">
+      <section className="flex-1 flex flex-col overflow-hidden border-r border-border-default bg-background-base">
+        <div className="h-14 border-b border-border-default px-4 flex items-center gap-2">
           <select
             value={symbol}
             onChange={(event) => setSymbol(event.target.value)}
-            className="h-8 border border-[#2A2E39] bg-[#131722] px-2 text-[10px] uppercase text-[#D1D4DC]"
+            className="h-8 border border-border-default bg-background-input px-2 text-[10px] uppercase text-text-primary"
           >
             {SYMBOLS.map((item) => (
               <option key={item} value={item}>
@@ -137,7 +137,7 @@ function DeepDiveContent() {
           <select
             value={timeframe}
             onChange={(event) => setTimeframe(event.target.value)}
-            className="h-8 border border-[#2A2E39] bg-[#131722] px-2 text-[10px] uppercase text-[#D1D4DC]"
+            className="h-8 border border-border-default bg-background-input px-2 text-[10px] uppercase text-text-primary"
           >
             {TIMEFRAMES.map((item) => (
               <option key={item} value={item}>
@@ -156,9 +156,9 @@ function DeepDiveContent() {
                   onClick={() => setTimeframe(tf)}
                   className="h-6 px-2 border text-[9px] uppercase tracking-[0.08em]"
                   style={{
-                    borderColor: isSelected ? "#F5A623" : isAligned ? "rgba(245,166,35,0.4)" : "#2A2E39",
+                    borderColor: isSelected ? "#F5A623" : isAligned ? "rgba(245,166,35,0.4)" : "var(--border-default)",
                     background: isSelected ? "#F5A623" : "transparent",
-                    color: isSelected ? "#131722" : isAligned ? "#C8851A" : "#787B86",
+                    color: isSelected ? "var(--text-primary)" : isAligned ? "#C8851A" : "var(--text-dim)",
                   }}
                 >
                   {tf}
@@ -167,14 +167,14 @@ function DeepDiveContent() {
             })}
           </div>
 
-          <span className="ml-2 text-[10px] uppercase tracking-[0.14em] text-[#787B86]">
+          <span className="ml-2 text-[10px] uppercase tracking-[0.14em] text-text-dim">
             {candlesQuery.isFetching || analysisQuery.isFetching ? "Syncing" : "Live"}
           </span>
         </div>
 
         <div className="flex-1 overflow-hidden relative">
           {candlesQuery.isLoading ? (
-            <div className="h-full flex items-center justify-center text-[#787B86] text-sm">Loading candles...</div>
+            <div className="h-full flex items-center justify-center text-text-dim text-sm">Loading candles...</div>
           ) : candlesQuery.isError ? (
             <div className="h-full flex items-center justify-center text-[#F5A623] text-sm">
               Failed to fetch Binance candles.
@@ -184,9 +184,9 @@ function DeepDiveContent() {
               <div className="flex-1 min-h-0">
                 <TvChart data={candlesQuery.data ?? []} zones={zones} />
               </div>
-              <div className="h-20 border-t border-[#1C1E24] bg-[#0A0C10] px-4 py-3">
+              <div className="h-20 border-t border-border-subtle bg-background-elevated px-4 py-3">
                 <div className="mb-2 flex items-center justify-between">
-                  <p className="text-[9px] uppercase tracking-[0.12em] text-[#4A4D58]">TREND PHASE PROGRESSION</p>
+                  <p className="text-[9px] uppercase tracking-[0.12em] text-text-muted">TREND PHASE PROGRESSION</p>
                   <div className="flex items-center gap-3">
                     <div className="flex items-center gap-1">
                       <div className="h-[3px] w-[10px] rounded-[1px] bg-[#F5A623]" />
@@ -206,15 +206,15 @@ function DeepDiveContent() {
                       <div key={stepLabel} className="flex flex-col gap-1">
                         <div
                           className="h-1"
-                          style={{ backgroundColor: isDone ? (isRetrace ? "#3A6BFF" : "#F5A623") : "#1C1E24" }}
+                          style={{ backgroundColor: isDone ? (isRetrace ? "#3A6BFF" : "#F5A623") : "var(--border-subtle)" }}
                         />
-                        <span className="text-[9px] uppercase tracking-[0.08em] text-[#787B86]">{stepLabel}</span>
+                        <span className="text-[9px] uppercase tracking-[0.08em] text-text-dim">{stepLabel}</span>
                       </div>
                     );
                   })}
                 </div>
                 <div className="mt-2 flex items-center justify-between">
-                  <p className="text-[9px] uppercase tracking-[0.08em] text-[#2A2E39]">
+                  <p className="text-[9px] uppercase tracking-[0.08em] text-text-muted">
                     CURRENT PHASE: {waitingFor.length > 0 ? waitingFor : "AWAITING DATA"}
                   </p>
                   <span
@@ -249,14 +249,14 @@ function DeepDiveContent() {
         {activeTab === "ANALYSIS" && (
           <div className="space-y-3">
             <div>
-              <p className="text-[10px] uppercase tracking-[0.1em] text-[#4A4D58] mb-2">MARKET STATS</p>
+              <p className="text-[10px] uppercase tracking-[0.1em] text-text-muted mb-2">MARKET STATS</p>
               <StatRow label="Global Trend" value={analysisQuery.data?.global_trend ?? "n/a"} />
               <StatRow label="Mitigations" value={analysisQuery.data?.total_mitigation_count ?? "n/a"} />
               <StatRow label="Max Depth" value={analysisQuery.data?.max_depth_reached ?? "n/a"} />
             </div>
-            <div style={{ height: 1, background: "#1C1E24" }} />
+            <div style={{ height: 1, background: "var(--border-subtle)" }} />
             <div>
-              <p className="text-[10px] uppercase tracking-[0.1em] text-[#4A4D58] mb-2">ZONE INFO</p>
+              <p className="text-[10px] uppercase tracking-[0.1em] text-text-muted mb-2">ZONE INFO</p>
               <StatRow label="Zones Loaded" value={zones.length} />
               <StatRow label="Current Phase" value={waitingFor.length > 0 ? waitingFor : "AWAITING DATA"} />
             </div>
@@ -266,7 +266,7 @@ function DeepDiveContent() {
         {activeTab === "STRUCTURE" && (
           <div className="space-y-3">
             <div>
-              <p className="text-[10px] uppercase tracking-[0.1em] text-[#4A4D58] mb-2">TREND STATE</p>
+              <p className="text-[10px] uppercase tracking-[0.1em] text-text-muted mb-2">TREND STATE</p>
               <StatRow label="Waiting For" value={analysisQuery.data?.waiting_for ?? "n/a"} />
               <StatRow label="Structural Levels" value={zones.length} />
               <StatRow label="Depth" value={depth} />
@@ -276,7 +276,7 @@ function DeepDiveContent() {
 
         {activeTab === "HISTORY" && (
           <div>
-            <p className="text-[10px] uppercase tracking-[0.1em] text-[#4A4D58] mb-2">STREAM</p>
+            <p className="text-[10px] uppercase tracking-[0.1em] text-text-muted mb-2">STREAM</p>
             <StatRow label="Status" value="Live" valueColor="#4CAF7D" />
             <StatRow label="Sync" value={candlesQuery.isFetching || analysisQuery.isFetching ? "Syncing..." : "Idle"} />
             <StatRow label="Interval" value="15s" />

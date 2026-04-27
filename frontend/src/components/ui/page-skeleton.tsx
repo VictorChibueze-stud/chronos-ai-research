@@ -14,7 +14,7 @@ function Bar({ className = "", style }: { className?: string; style?: CSSPropert
 export function FullBleedPageSkeleton({ label = "LOADING" }: { label?: string }) {
   return (
     <div
-      className="flex h-full min-h-[240px] flex-col gap-4 bg-[#131722] p-6"
+      className="flex h-full min-h-[240px] flex-col gap-4 bg-background-surface p-6"
       style={mono}
       aria-busy
       aria-label={label}
@@ -74,7 +74,7 @@ export function SimpleListSkeleton({ rows = 10 }: { rows?: number }) {
 /** Integrations-style stacked cards. */
 export function IntegrationsPageSkeleton() {
   return (
-    <div className="min-h-full bg-[#0D0F14] p-4" style={mono} aria-busy aria-label="Loading integrations">
+    <div className="min-h-full bg-background-base p-4" style={mono} aria-busy aria-label="Loading integrations">
       <Bar className="mb-3 h-12 w-full max-w-2xl" />
       {Array.from({ length: 4 }).map((_, i) => (
         <Bar key={i} className="mb-3 h-36 w-full" />

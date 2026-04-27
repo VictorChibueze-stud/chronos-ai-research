@@ -203,7 +203,7 @@ export function AppSidebar({ collapsed = false, onToggle, toggleIcon }: AppSideb
 
   return (
     <aside
-      className="relative flex h-full min-h-0 flex-col border-r border-[#363A45] bg-[#1E222D] text-[#D1D4DC] transition-[width,min-width] duration-200"
+      className="relative flex h-full min-h-0 flex-col border-r border-[var(--border-default)] bg-[var(--bg-surface)] text-[var(--text-primary)] transition-[width,min-width] duration-200"
       style={{
         width: collapsed ? 56 : 176,
         minWidth: collapsed ? 56 : 176,
@@ -214,7 +214,7 @@ export function AppSidebar({ collapsed = false, onToggle, toggleIcon }: AppSideb
         onClick={onToggle}
         aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        className="absolute -right-3 top-4 z-20 inline-flex h-6 w-6 items-center justify-center border border-[#363A45] bg-[#1E222D] text-[#787B86] hover:text-[#D1D4DC]"
+        className="absolute -right-3 top-4 z-20 inline-flex h-6 w-6 items-center justify-center border border-[var(--border-strong)] bg-[var(--bg-elevated)] text-[var(--text-dim)] hover:text-[var(--text-primary)]"
       >
         {toggleIcon}
       </button>
@@ -247,7 +247,7 @@ export function AppSidebar({ collapsed = false, onToggle, toggleIcon }: AppSideb
         )}
       </div>
 
-      <div className={`${collapsed ? "mx-2" : "mx-5"} mb-3 h-px bg-[#363A45]`} />
+      <div className={`${collapsed ? "mx-2" : "mx-5"} mb-3 h-px bg-[var(--border-subtle)]`} />
 
       <nav className={collapsed ? "px-1" : "px-2"}>
         {PRIMARY_NAV.map((item) => {
@@ -257,11 +257,12 @@ export function AppSidebar({ collapsed = false, onToggle, toggleIcon }: AppSideb
             <Link key={item.href} href={item.href} className="mb-1 block no-underline" title={collapsed ? item.label : undefined}>
               <div
                 className={[
-                  "flex items-center gap-2.5 border-l px-3 py-1.5 text-[10px] tracking-[0.1em] transition-colors",
-                  active
-                    ? "border-[#F5A623] bg-[#2A2E39] text-[#D1D4DC]"
-                    : "border-transparent text-[#787B86] hover:bg-[#2A2E39]/60 hover:text-[#D1D4DC]",
-                ].join(" ")}
+                    "flex items-center gap-2.5 border-l px-3 py-1.5 transition-colors",
+                    active
+                      ? "border-[#F5A623] bg-[var(--bg-elevated)] text-[var(--text-primary)]"
+                      : "border-transparent text-[var(--text-dim)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]",
+                  ].join(" ")}
+                style={{ fontFamily: "var(--font-sans)", fontSize: 11, fontWeight: 500, letterSpacing: "0.05em" }}
               >
                 <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
                 {!collapsed ? <span>{item.label}</span> : null}
@@ -271,7 +272,7 @@ export function AppSidebar({ collapsed = false, onToggle, toggleIcon }: AppSideb
         })}
       </nav>
 
-      <div className={`${collapsed ? "mx-2" : "mx-5"} my-3 h-px bg-[#363A45]`} />
+      <div className={`${collapsed ? "mx-2" : "mx-5"} my-3 h-px bg-[var(--border-subtle)]`} />
 
       <div className={collapsed ? "px-1" : "px-2"}>
         {SECONDARY_NAV.map((item) => {
@@ -282,11 +283,12 @@ export function AppSidebar({ collapsed = false, onToggle, toggleIcon }: AppSideb
               <Link key={item.label} href={item.href} className="mb-1 block no-underline" title={collapsed ? item.label : undefined}>
                 <div
                   className={[
-                    "flex items-center gap-2.5 border-l px-3 py-1.5 text-[10px] tracking-[0.1em] transition-colors",
+                    "flex items-center gap-2.5 border-l px-3 py-1.5 transition-colors",
                     active
-                      ? "border-[#F5A623] bg-[#2A2E39] text-[#D1D4DC]"
-                      : "border-transparent text-[#787B86] hover:bg-[#2A2E39]/60 hover:text-[#D1D4DC]",
+                      ? "border-[#F5A623] bg-[var(--bg-elevated)] text-[var(--text-primary)]"
+                      : "border-transparent text-[var(--text-dim)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]",
                   ].join(" ")}
+                  style={{ fontFamily: "var(--font-sans)", fontSize: 11, fontWeight: 500, letterSpacing: "0.05em" }}
                 >
                   <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
                   {!collapsed ? <span>{item.label}</span> : null}
@@ -297,7 +299,8 @@ export function AppSidebar({ collapsed = false, onToggle, toggleIcon }: AppSideb
           return (
             <div
               key={item.label}
-              className="mb-1 flex items-center gap-2.5 border-l border-transparent px-3 py-1.5 text-[10px] tracking-[0.1em] text-[#787B86] opacity-80"
+              className="mb-1 flex items-center gap-2.5 border-l border-transparent px-3 py-1.5 text-[var(--text-dim)] opacity-80"
+              style={{ fontFamily: "var(--font-sans)", fontSize: 11, fontWeight: 500, letterSpacing: "0.05em" }}
               title={collapsed ? `${item.label} (locked)` : `${item.label} (coming soon)`}
             >
               <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
@@ -312,14 +315,14 @@ export function AppSidebar({ collapsed = false, onToggle, toggleIcon }: AppSideb
         })}
       </div>
 
-      <div className={`${collapsed ? "mx-2" : "mx-5"} my-3 h-px bg-[#363A45]`} />
+      <div className={`${collapsed ? "mx-2" : "mx-5"} my-3 h-px bg-[var(--border-subtle)]`} />
 
-      <div className={`mt-auto space-y-4 pb-4 ${collapsed ? "px-2" : "px-4"}`}>
+      <div className={`mt-auto space-y-4 border-t border-[var(--border-subtle)] bg-[var(--bg-base)] pb-4 pt-4 ${collapsed ? "px-2" : "px-4"}`}>
         <div>
           {!collapsed ? (
             <div className="mb-2 flex items-center justify-between">
               <Tooltip content={capacityTooltip} multiline>
-                <span className="cursor-default text-[9px] uppercase tracking-[0.12em] text-[#787B86]">CAPACITY</span>
+                <span className="cursor-default uppercase tracking-[0.12em]" style={{ fontFamily: "var(--font-sans)", fontSize: 9, color: "var(--text-dim)" }}>CAPACITY</span>
               </Tooltip>
               <span className="text-[9px] uppercase tracking-[0.12em]" style={{ color: fractionColor }}>
                 {formatLocaleInt(activeSetups)} / {formatLocaleInt(maxCapacity)}
@@ -327,7 +330,7 @@ export function AppSidebar({ collapsed = false, onToggle, toggleIcon }: AppSideb
             </div>
           ) : null}
           <div
-            className="h-2 w-full border border-[#363A45] bg-[#131722]"
+            className="h-2 w-full border border-[var(--border-strong)] bg-[var(--bg-base)]"
             style={{ overflow: overCapacity ? "visible" : "hidden" }}
           >
             <div
@@ -342,11 +345,11 @@ export function AppSidebar({ collapsed = false, onToggle, toggleIcon }: AppSideb
           {!collapsed ? (
             <>
               <div className="mt-2 flex flex-wrap items-baseline gap-1.5">
-                <span className="text-[9px] uppercase tracking-[0.1em] text-[#787B86]">NEXT</span>
-                <span className="font-mono text-[10px] tracking-[0.06em] text-[#D1D4DC]">{countdown}</span>
+                <span className="uppercase tracking-[0.1em]" style={{ fontFamily: "var(--font-sans)", fontSize: 9, color: "var(--text-dim)" }}>NEXT</span>
+                <span className="font-mono tracking-[0.06em]" style={{ fontSize: 10, color: "var(--text-secondary)" }}>{countdown}</span>
               </div>
               <div className="mt-1 flex flex-wrap items-baseline gap-1.5">
-                <span className="text-[9px] uppercase tracking-[0.1em] text-[#787B86]">LAST</span>
+                <span className="uppercase tracking-[0.1em]" style={{ fontFamily: "var(--font-sans)", fontSize: 9, color: "var(--text-dim)" }}>LAST</span>
                 {health?.last_scan ? (
                   <span
                     style={{
@@ -356,19 +359,20 @@ export function AppSidebar({ collapsed = false, onToggle, toggleIcon }: AppSideb
                     <RelativeTimeWithTooltip
                       iso={health.last_scan}
                       fallback="PENDING"
-                      className="font-mono text-[10px] tracking-[0.06em] text-[#D1D4DC]"
+                      className="font-mono tracking-[0.06em]"
+                      style={{ fontSize: 10, color: "var(--text-secondary)" }}
                     />
                   </span>
                 ) : (
-                  <span className="text-[10px] uppercase tracking-[0.06em] text-[#787B86]">PENDING</span>
+                  <span className="text-[10px] uppercase tracking-[0.06em] text-[var(--text-dim)]">PENDING</span>
                 )}
               </div>
             </>
           ) : null}
           {showAnalysisFooter ? (
-            <div className="mt-2.5 border-t border-[#363A45]/60 pt-2.5">
+            <div className="mt-2.5 border-t border-[var(--border-subtle)] pt-2.5">
               {!collapsed ? (
-                <div className="mb-1 text-[9px] uppercase tracking-[0.12em] text-[#787B86]">ANALYSIS STATUS</div>
+                <div className="mb-1 text-[9px] uppercase tracking-[0.12em] text-[var(--text-dim)]">ANALYSIS STATUS</div>
               ) : null}
               <div className={`flex items-center gap-1.5 ${collapsed ? "justify-center" : ""}`}>
                 <Tooltip content="Background analysis is running. Market data will update when complete.">
@@ -389,7 +393,7 @@ export function AppSidebar({ collapsed = false, onToggle, toggleIcon }: AppSideb
                   </span>
                 </Tooltip>
                 {!collapsed ? (
-                  <span className="min-w-0 text-[9px] leading-tight tracking-[0.06em] text-[#787B86]">
+                  <span className="min-w-0 text-[9px] leading-tight tracking-[0.06em] text-[var(--text-dim)]">
                     {analysisFooterMessage}
                   </span>
                 ) : null}
@@ -398,31 +402,32 @@ export function AppSidebar({ collapsed = false, onToggle, toggleIcon }: AppSideb
           ) : null}
         </div>
 
-        <div className="border-t border-[#363A45]/90 pt-4">
-          {!collapsed ? <div className="mb-2 text-[9px] uppercase tracking-[0.12em] text-[#787B86]">Killswitch</div> : null}
+        <div className="border-t border-[var(--border-subtle)] pt-4">
+          {!collapsed ? <div className="mb-2 text-[9px] uppercase tracking-[0.12em] text-[var(--text-dim)]">Killswitch</div> : null}
           <div
-            className="flex items-center justify-between border border-[#363A45] bg-[#2A2E39] px-3 py-2.5"
+            className="flex items-center justify-between border border-[var(--border-default)] bg-[var(--bg-elevated)] px-3 py-2.5"
             style={{ cursor: "pointer" }}
             onClick={handleKillswitchToggle}
             title="Killswitch"
           >
             {!collapsed ? (
-              <span className="text-[10px] uppercase tracking-[0.08em] text-[#D1D4DC]">
+              <span className="text-[10px] uppercase tracking-[0.08em] text-[var(--text-primary)]">
                 {killswitchActive ? "Armed" : "Standby"}
               </span>
             ) : null}
-            <div className="relative h-5 w-10 shrink-0 rounded-full border border-[#363A45] bg-[#131722]">
+            <div className="relative h-5 w-10 shrink-0 rounded-full border border-[var(--border-default)] bg-[var(--bg-base)]">
               <div
                 className="absolute top-[1px] h-3.5 w-3.5 rounded-full"
                 style={{
                   left: killswitchActive ? 20 : 2,
-                  background: killswitchActive ? "#FF1744" : "#787B86",
+                  background: killswitchActive ? "#FF1744" : "var(--text-dim)",
                   transition: "left 0.15s ease",
                 }}
               />
             </div>
           </div>
         </div>
+
       </div>
     </aside>
   );

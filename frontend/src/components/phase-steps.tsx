@@ -7,8 +7,8 @@ interface PhaseStepsProps {
 export function PhaseSteps({ step, total = 5, direction }: PhaseStepsProps) {
   const clamped = Math.max(0, Math.min(total, step));
   const filledColor = direction === "LONG" ? "#F5A623" : "#E05A5A";
-  const emptyColor = "#1C1E24";
-  const borderEmptyColor = "#2A2D36";
+  const emptyColor = "var(--border-subtle)";
+  const borderEmptyColor = "var(--border-default)";
 
   return (
     <div style={{ display: "flex", gap: 3, alignItems: "center" }}>

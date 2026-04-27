@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
-import { RefreshCw, X } from "lucide-react";
+import { RefreshCw, TrendingUp, X } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   Area,
   CartesianGrid,
@@ -18,12 +19,16 @@ import {
 import { api } from "@/lib/api";
 import type { PaperAccount, PaperPerformance, PaperTrade } from "@/lib/types";
 
-const BG = "#0D0F14";
-const BORDER = "#1E222D";
+const BG = "var(--bg-base)";
+const BORDER = "var(--bg-elevated)";
 const MONO = '"IBM Plex Mono", monospace';
 
 function formatUsd(n: number): string {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+}
+
+function formatNumber(n: number): string {
+  return Math.abs(n).toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 
 function formatPriceCompact(n: number): string {
@@ -60,7 +65,7 @@ function statusUi(status: PaperTrade["status"]): {
     case "closed_manual":
     case "closed_time":
     default:
-      return { bar: "#787B86", pill: "#787B86", label: status === "closed_manual" ? "MANUAL" : "TIME" };
+      return { bar: "var(--text-dim)", pill: "var(--text-dim)", label: status === "closed_manual" ? "MANUAL" : "TIME" };
   }
 }
 
@@ -111,7 +116,7 @@ function TradeCloseDot(props: {
   const { cx, cy, payload } = props;
   if (cx == null || cy == null) return null;
   if (payload?.trade_pnl == null) return null;
-  return <circle cx={cx} cy={cy} r={4} fill="#7B61FF" stroke="#0D0F14" strokeWidth={1} />;
+  return <circle cx={cx} cy={cy} r={4} fill="#7B61FF" stroke="var(--bg-base)" strokeWidth={1} />;
 }
 
 function TradesPageSkeleton() {
@@ -137,7 +142,7 @@ function TradesPageSkeleton() {
             key={i}
             style={{
               height: 120,
-              background: "#111318",
+              background: "var(--bg-surface)",
               borderRadius: 2,
               animation: "card-pulse 1.5s ease-in-out infinite",
             }}
@@ -156,7 +161,7 @@ function TradesPageSkeleton() {
             key={i}
             style={{
               height: 52,
-              background: "#111318",
+              background: "var(--bg-surface)",
               borderRadius: 2,
               animation: "card-pulse 1.5s ease-in-out infinite",
             }}
@@ -166,7 +171,7 @@ function TradesPageSkeleton() {
       <div
         style={{
           height: 180,
-          background: "#111318",
+          background: "var(--bg-surface)",
           borderRadius: 2,
           animation: "card-pulse 1.5s ease-in-out infinite",
         }}
@@ -275,7 +280,7 @@ export default function TradesPage() {
     fontFamily: MONO,
     border: `1px solid ${active ? "#F5A623" : BORDER}`,
     background: active ? "#F5A623" : "transparent",
-    color: active ? "#0D0F14" : "#787B86",
+    color: active ? "var(--bg-base)" : "var(--text-dim)",
     cursor: "pointer",
     textTransform: "uppercase",
     borderRadius: 2,
@@ -285,8 +290,9 @@ export default function TradesPage() {
     <div
       style={{
         minHeight: "100vh",
+        overflowY: "auto",
         background: BG,
-        color: "#D1D4DC",
+        color: "var(--text-primary)",
         fontFamily: MONO,
         padding: "24px 28px 40px",
       }}
@@ -306,7 +312,7 @@ export default function TradesPage() {
           >
             TRADE HISTORY
           </div>
-          <div style={{ marginTop: 6, fontSize: 11, color: "#787B86", letterSpacing: "0.06em" }}>
+          <div style={{ marginTop: 6, fontSize: 11, color: "var(--text-dim)", letterSpacing: "0.06em" }}>
             PAPER TRADING · ALL ACCOUNTS
           </div>
         </div>
@@ -319,7 +325,7 @@ export default function TradesPage() {
             height: 36,
             borderRadius: "50%",
             border: `1px solid ${BORDER}`,
-            background: "#111318",
+            background: "var(--bg-surface)",
             color: "#F5A623",
             cursor: "pointer",
             display: "flex",
@@ -341,7 +347,7 @@ export default function TradesPage() {
           display: "flex",
           gap: 0,
           borderBottom: `1px solid ${BORDER}`,
-          background: "#0D0F14",
+          background: "var(--bg-base)",
           padding: 0,
           marginBottom: 16,
         }}
@@ -361,7 +367,7 @@ export default function TradesPage() {
               borderBottom: activeUniverse === tab.key
                 ? "2px solid #F5A623"
                 : "2px solid transparent",
-              color: activeUniverse === tab.key ? "#F5A623" : "#4A4D58",
+              color: activeUniverse === tab.key ? "#F5A623" : "var(--text-muted)",
               fontFamily: MONO,
               fontSize: 10,
               letterSpacing: "0.12em",
@@ -400,7 +406,7 @@ export default function TradesPage() {
               style={{
                 textAlign: "left",
                 padding: 14,
-                background: "#111318",
+                background: "var(--bg-surface)",
                 border: `1px solid ${BORDER}`,
                 borderLeft: active ? "3px solid #F5A623" : `1px solid ${BORDER}`,
                 cursor: "pointer",
@@ -414,19 +420,22 @@ export default function TradesPage() {
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.borderColor = BORDER;
-                e.currentTarget.style.background = "#111318";
+                e.currentTarget.style.background = "var(--bg-surface)";
               }}
             >
-              <div style={{ fontSize: 10, letterSpacing: "0.1em", color: "#787B86", marginBottom: 8 }}>
+              <div style={{ fontSize: 10, letterSpacing: "0.1em", color: "var(--text-dim)", marginBottom: 8 }}>
                 {a.name.toUpperCase()}
               </div>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#FFFFFF" }}>{formatUsd(a.balance_usd)}</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+                <span style={{ fontFamily: "var(--font-sans)", fontSize: 11, color: "var(--text-dim)" }}>USD</span>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 22, fontWeight: 700, color: "var(--text-primary)" }}>{formatNumber(a.balance_usd)}</span>
+              </div>
               <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: pnlPos ? "#00C853" : "#FF1744" }}>
+                <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "var(--font-mono)", color: pnlPos ? "var(--bull)" : "var(--bear)" }}>
                   {pnlPos ? "+" : ""}
                   {formatUsd(a.total_pnl_usd)}
                 </span>
-                <span style={{ fontSize: 11, color: "#787B86" }}>
+                <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
                   ({pnlPos ? "+" : ""}
                   {a.total_pnl_pct.toFixed(1)}%)
                 </span>
@@ -446,7 +455,7 @@ export default function TradesPage() {
                 ) : null}
               </div>
               <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
-                <div style={{ flex: 1, height: 4, background: "#1E222D", borderRadius: 1, overflow: "hidden" }}>
+                <div style={{ flex: 1, height: 4, background: "var(--bg-elevated)", borderRadius: 1, overflow: "hidden" }}>
                   <div
                     style={{
                       width: `${Math.min(100, a.win_rate_pct)}%`,
@@ -455,9 +464,9 @@ export default function TradesPage() {
                     }}
                   />
                 </div>
-                <span style={{ fontSize: 10, color: "#787B86" }}>{a.win_rate_pct.toFixed(0)}%</span>
+                <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{a.win_rate_pct.toFixed(0)}%</span>
               </div>
-              <div style={{ marginTop: 8, fontSize: 10, color: "#787B86" }}>
+              <div style={{ marginTop: 8, fontSize: 10, color: "var(--text-dim)" }}>
                 OPEN POSITIONS{" "}
                 <span
                   style={{
@@ -475,7 +484,7 @@ export default function TradesPage() {
           );
         })}
         {sortedAccounts.length === 0 && !loading ? (
-          <div style={{ gridColumn: "1 / -1", fontSize: 11, color: "#787B86" }}>No paper accounts configured.</div>
+          <div style={{ gridColumn: "1 / -1", fontSize: 11, color: "var(--text-dim)" }}>No paper accounts configured.</div>
         ) : null}
       </div>
 
@@ -502,7 +511,7 @@ export default function TradesPage() {
                 tooltip:
                   "Annualized risk-adjusted return. >1 good, >2 excellent",
                 color:
-                  (performance.sharpe_ratio ?? 0) > 1 ? "#00C853" : "#787B86",
+                  (performance.sharpe_ratio ?? 0) > 1 ? "#00C853" : "var(--text-dim)",
               },
               {
                 label: "SORTINO",
@@ -513,7 +522,7 @@ export default function TradesPage() {
                 tooltip:
                   "Like Sharpe but only penalizes downside volatility",
                 color:
-                  (performance.sortino_ratio ?? 0) > 1 ? "#00C853" : "#787B86",
+                  (performance.sortino_ratio ?? 0) > 1 ? "#00C853" : "var(--text-dim)",
               },
               {
                 label: "CALMAR",
@@ -523,7 +532,7 @@ export default function TradesPage() {
                     : "—",
                 tooltip: "Annualized return divided by max drawdown",
                 color:
-                  (performance.calmar_ratio ?? 0) > 0 ? "#00C853" : "#787B86",
+                  (performance.calmar_ratio ?? 0) > 0 ? "#00C853" : "var(--text-dim)",
               },
               {
                 label: "PROFIT FACTOR",
@@ -561,7 +570,7 @@ export default function TradesPage() {
                 color:
                   (performance.risk_reward_ratio ?? 0) > 1.5
                     ? "#00C853"
-                    : "#787B86",
+                    : "var(--text-dim)",
               },
               {
                 label: "MAX DD",
@@ -574,7 +583,7 @@ export default function TradesPage() {
                 color:
                   (performance.max_drawdown_pct ?? 0) > 10
                     ? "#EF5350"
-                    : "#787B86",
+                    : "var(--text-dim)",
               },
               {
                 label: "DD DURATION",
@@ -584,7 +593,7 @@ export default function TradesPage() {
                     : "—",
                 tooltip:
                   "Longest period spent below previous equity peak",
-                color: "#787B86",
+                color: "var(--text-dim)",
               },
             ] as const
           ).map((stat) => (
@@ -592,7 +601,7 @@ export default function TradesPage() {
               key={stat.label}
               title={stat.tooltip}
               style={{
-                background: "#111318",
+                background: "var(--bg-surface)",
                 border: `1px solid ${BORDER}`,
                 borderRadius: 2,
                 padding: "8px 10px",
@@ -606,7 +615,7 @@ export default function TradesPage() {
                   fontFamily: MONO,
                   fontSize: 7,
                   letterSpacing: "0.1em",
-                  color: "#4A4D58",
+                  color: "var(--text-muted)",
                   textTransform: "uppercase",
                 }}
               >
@@ -630,15 +639,23 @@ export default function TradesPage() {
       {/* Equity curve */}
       <div
         style={{
-          height: 180,
           minHeight: 180,
           minWidth: 0,
           marginBottom: 20,
           background: BG,
           border: `1px solid ${BORDER}`,
-          display: loading && accounts.length === 0 ? "none" : "block",
+          display: loading && accounts.length === 0 ? "none" : "flex",
+          alignItems: "center",
+          justifyContent: "center",
         }}
       >
+        {chartData.length === 0 ? (
+          <EmptyState
+            icon={<TrendingUp size={28} />}
+            title="No equity data yet"
+            message="Closed trades will appear here as your equity curve builds."
+          />
+        ) : (
         <ResponsiveContainer width="100%" height={180}>
           <ComposedChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
             <defs>
@@ -654,7 +671,7 @@ export default function TradesPage() {
             <CartesianGrid stroke="#1a1f28" vertical={false} />
             <XAxis
               dataKey="timestamp"
-              tick={{ fill: "#787B86", fontSize: 9, fontFamily: MONO }}
+              tick={{ fill: "var(--text-dim)", fontSize: 9, fontFamily: MONO }}
               tickFormatter={(v) => {
                 const d = new Date(v);
                 return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-GB", { month: "short", day: "numeric" });
@@ -663,16 +680,16 @@ export default function TradesPage() {
               tickLine={false}
             />
             <YAxis
-              tick={{ fill: "#787B86", fontSize: 9, fontFamily: MONO }}
+              tick={{ fill: "var(--text-dim)", fontSize: 9, fontFamily: MONO }}
               tickFormatter={(v) => `$${v}`}
               axisLine={{ stroke: BORDER }}
               tickLine={false}
               width={56}
             />
-            <ReferenceLine y={0} stroke="#434651" strokeDasharray="4 4" />
+            <ReferenceLine y={0} stroke="var(--text-muted)" strokeDasharray="4 4" />
             <RechartsTooltip
               contentStyle={{
-                background: "#111318",
+                background: "var(--bg-surface)",
                 border: `1px solid ${BORDER}`,
                 fontFamily: MONO,
                 fontSize: 10,
@@ -702,85 +719,110 @@ export default function TradesPage() {
             />
           </ComposedChart>
         </ResponsiveContainer>
+        )}
       </div>
 
       {/* Filters */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-          <span style={{ fontSize: 9, color: "#787B86", marginRight: 4 }}>ACCOUNT</span>
-          <button
-            type="button"
-            style={filterButtonStyle(selectedAccountId === null)}
-            onClick={() => setSelectedAccountId(null)}
-          >
-            ALL
-          </button>
-          {sortedAccounts.map((a) => (
+      {/* Filters + Table panel */}
+      <div
+        style={{
+          border: `1px solid ${BORDER}`,
+          borderRadius: 4,
+          overflow: "hidden",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {/* Filter row */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+            padding: "12px 16px",
+            borderBottom: `1px solid ${BORDER}`,
+            background: "var(--bg-elevated)",
+          }}
+        >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 9, color: "var(--text-dim)", marginRight: 4 }}>ACCOUNT</span>
             <button
-              key={`f-${a.id}`}
               type="button"
-              style={filterButtonStyle(selectedAccountId === a.id)}
-              onClick={() => setSelectedAccountId(a.id)}
+              style={filterButtonStyle(selectedAccountId === null)}
+              onClick={() => setSelectedAccountId(null)}
             >
-              {a.name.toUpperCase()}
+              ALL
             </button>
-          ))}
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-          <span style={{ fontSize: 9, color: "#787B86", marginRight: 4 }}>STATUS</span>
-          {STATUS_BUTTONS.map((b) => (
-            <button
-              key={b.key}
-              type="button"
-              style={filterButtonStyle(statusFilter === b.key)}
-              onClick={() => setStatusFilter(b.key)}
-            >
-              {b.label}
-            </button>
-          ))}
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
-          <input
-            type="text"
-            placeholder="SYMBOL"
-            value={symbolInput}
-            onChange={(e) => setSymbolInput(e.target.value)}
-            style={{
-              background: "#111318",
-              border: `1px solid ${BORDER}`,
-              color: "#D1D4DC",
-              padding: "6px 10px",
-              fontSize: 11,
-              fontFamily: MONO,
-              minWidth: 140,
-            }}
-          />
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <span style={{ fontSize: 9, color: "#787B86" }}>LIMIT</span>
-            {([50, 100, 500] as const).map((n) => (
-              <button key={n} type="button" style={filterButtonStyle(limit === n)} onClick={() => setLimit(n)}>
-                {n}
+            {sortedAccounts.map((a) => (
+              <button
+                key={`f-${a.id}`}
+                type="button"
+                style={filterButtonStyle(selectedAccountId === a.id)}
+                onClick={() => setSelectedAccountId(a.id)}
+              >
+                {a.name.toUpperCase()}
               </button>
             ))}
           </div>
-        </div>
-      </div>
-
-      {/* Table */}
-      {filteredTrades.length === 0 && !loading ? (
-        <div style={{ padding: "48px 24px", textAlign: "center" }}>
-          <div style={{ fontSize: 12, letterSpacing: "0.12em", color: "#787B86" }}>NO PAPER TRADES YET</div>
-          <div style={{ marginTop: 10, fontSize: 10, color: "#4A4D58", maxWidth: 360, marginInline: "auto" }}>
-            Paper trading engine will open positions when entry conditions are met.
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 9, color: "var(--text-dim)", marginRight: 4 }}>STATUS</span>
+            {STATUS_BUTTONS.map((b) => (
+              <button
+                key={b.key}
+                type="button"
+                style={filterButtonStyle(statusFilter === b.key)}
+                onClick={() => setStatusFilter(b.key)}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
+            <input
+              type="text"
+              placeholder="SYMBOL"
+              value={symbolInput}
+              onChange={(e) => setSymbolInput(e.target.value)}
+              style={{
+                background: "var(--bg-surface)",
+                border: `1px solid ${BORDER}`,
+                color: "var(--text-primary)",
+                padding: "6px 10px",
+                fontSize: 11,
+                fontFamily: MONO,
+                minWidth: 140,
+              }}
+            />
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 9, color: "var(--text-dim)" }}>LIMIT</span>
+              {([50, 100, 500] as const).map((n) => (
+                <button key={n} type="button" style={filterButtonStyle(limit === n)} onClick={() => setLimit(n)}>
+                  {n}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          {filteredTrades.map((trade) => {
-            const su = statusUi(trade.status);
-            const dir = directionUi(trade.direction);
-            const pnl = trade.pnl_usd;
-            const pnlPct = trade.pnl_pct;
+
+        {/* Trade list */}
+        <div style={{ overflowY: "visible" }}>
+          {filteredTrades.length === 0 && !loading ? (
+            <EmptyState
+              icon={<TrendingUp size={24} />}
+              title="No trades found"
+              message={
+                statusFilter !== "ALL"
+                  ? "No trades match the current filter. Try a different status or clear your symbol search."
+                  : "No trades have been opened yet. The paper trading engine will open positions when entry conditions are met."
+              }
+            />
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              {filteredTrades.map((trade) => {
+                const su = statusUi(trade.status);
+                const dir = directionUi(trade.direction);
+                const pnl = trade.pnl_usd;
+                const pnlPct = trade.pnl_pct;
             return (
               <div
                 key={trade.id}
@@ -811,7 +853,7 @@ export default function TradesPage() {
                 }}
               >
                 <div style={{ width: 4, alignSelf: "stretch", background: su.bar, borderRadius: 1 }} />
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#FFFFFF" }}>{trade.symbol}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>{trade.symbol}</div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: dir.color }}>
                   {dir.arrow} {dir.label}
                 </div>
@@ -822,14 +864,14 @@ export default function TradesPage() {
                         fontSize: 8,
                         letterSpacing: "0.06em",
                         padding: "2px 6px",
-                        background: "#1E222D",
-                        color: "#787B86",
+                        background: "var(--bg-elevated)",
+                        color: "var(--text-dim)",
                       }}
                     >
                       {trade.market_state_at_entry}
                     </span>
                   ) : (
-                    <span style={{ fontSize: 9, color: "#434651" }}>—</span>
+                    <span style={{ fontSize: 9, color: "var(--text-muted)" }}>—</span>
                   )}
                 </div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#F5A623" }}>
@@ -842,8 +884,8 @@ export default function TradesPage() {
                     TP {trade.take_profit_price != null ? formatPriceCompact(trade.take_profit_price) : "—"}
                   </span>
                 </div>
-                <div style={{ fontSize: 10, color: "#787B86" }}>{trade.lot_size.toFixed(4)}</div>
-                <div style={{ fontSize: 10, color: "#787B86" }}>{formatUsd(trade.risk_amount_usd)}</div>
+                <div style={{ fontSize: 10, color: "var(--text-dim)" }}>{trade.lot_size.toFixed(4)}</div>
+                <div style={{ fontSize: 10, color: "var(--text-dim)" }}>{formatUsd(trade.risk_amount_usd)}</div>
                 <div>
                   {pnl != null ? (
                     <>
@@ -858,17 +900,17 @@ export default function TradesPage() {
                         {formatUsd(pnl)}
                       </div>
                       {pnlPct != null ? (
-                        <div style={{ fontSize: 9, color: "#787B86" }}>
+                        <div style={{ fontSize: 9, color: "var(--text-dim)" }}>
                           ({pnlPct >= 0 ? "+" : ""}
                           {pnlPct.toFixed(2)}%)
                         </div>
                       ) : null}
                     </>
                   ) : (
-                    <div style={{ fontSize: 11, color: "#787B86" }}>—</div>
+                    <div style={{ fontSize: 11, color: "var(--text-dim)" }}>—</div>
                   )}
                 </div>
-                <div style={{ fontSize: 10, color: "#787B86" }}>{tradeDuration(trade.open_at, trade.close_at)}</div>
+                <div style={{ fontSize: 10, color: "var(--text-dim)" }}>{tradeDuration(trade.open_at, trade.close_at)}</div>
                 <div>
                   <span
                     style={{
@@ -897,7 +939,7 @@ export default function TradesPage() {
                       onClick={() => void handleCloseTrade(trade.id)}
                       style={{
                         border: `1px solid ${BORDER}`,
-                        background: "#111318",
+                        background: "var(--bg-surface)",
                         color: "#FF1744",
                         cursor: closingId === trade.id ? "wait" : "pointer",
                         padding: 4,
@@ -914,8 +956,10 @@ export default function TradesPage() {
               </div>
             );
           })}
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

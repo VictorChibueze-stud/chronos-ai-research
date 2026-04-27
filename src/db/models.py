@@ -113,6 +113,13 @@ class MonitoredSetup(Base):
     market_state: Mapped[Optional[str]] = mapped_column(
         String, nullable=True, default=None
     )
+    critical_veto_flag: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    # When fundamentals analysis last ran for this market.
+    fundamental_analyzed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -287,6 +294,9 @@ class ScanJobLog(Base):
     failure_count: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     error_message: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    universe_name: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
 
 
 class GlobalStructureCache(Base):
@@ -385,8 +395,9 @@ class ManualStructureOverride(Base):
     __tablename__ = "manual_structure_overrides"
     __table_args__ = (
         UniqueConstraint(
-            "symbol", "override_type",
-            name="uq_manual_override_symbol_type",
+            "symbol", "override_type", "depth_index",
+            name="uq_manual_override_symbol_type_depth",
+            postgresql_nulls_not_distinct=True,
         ),
     )
 
@@ -414,6 +425,19 @@ class ManualStructureOverride(Base):
         Float, nullable=True,
     )
 
+    approx_price_a: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True,
+    )
+    approx_timestamp_a: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    approx_price_b: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True,
+    )
+    approx_timestamp_b: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+
     start_timestamp: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True,
     )
@@ -430,6 +454,10 @@ class ManualStructureOverride(Base):
 
     depth_index: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True,
+    )
+
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
     )
 
     is_active: Mapped[bool] = mapped_column(
@@ -569,6 +597,17 @@ class PaperAccount(Base):
     tp_mode: Mapped[str] = mapped_column(
         String, nullable=False, default="global_bos"
     )
+    entry_lookback_candles: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3
+    )
+    # How many of the most recent completed candles to
+    # check for an EMA crossover. Default 3 means a
+    # crossover on any of the last 3 candles still counts.
+    entry_check_interval_hours: Mapped[float] = mapped_column(
+        Float, nullable=False, default=1.0
+    )
+    # How often (in hours) the entry signal scheduler runs,
+    # independently of the 4h structural refresh. Default 1.0.
     time_exit_days: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True, default=None
     )
@@ -678,4 +717,48 @@ class PaperTrade(Base):
 
     account: Mapped["PaperAccount"] = relationship(
         back_populates="trades"
+    )
+
+
+class AnalysisResultCache(Base):
+    """Cache of the full ``GET /api/analysis/{symbol}`` response.
+
+    Rows are written by the 4-hour refresh job (and the live request that
+    produces the first miss) and invalidated by:
+      * ``run_universe_ranking`` after promoting a symbol
+      * manual structure override POSTs
+      * TTL expiry (default 4 hours)
+      * params-hash mismatch (scan settings changed)
+    """
+
+    __tablename__ = "analysis_result_cache"
+    __table_args__ = (
+        UniqueConstraint(
+            "symbol", "timeframe",
+            name="uq_analysis_cache_sym_tf",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    symbol: Mapped[str] = mapped_column(
+        String, nullable=False, index=True
+    )
+    timeframe: Mapped[str] = mapped_column(
+        String, nullable=False
+    )
+    result_json: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    params_hash: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True
+    )
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    ttl_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=14400
     )

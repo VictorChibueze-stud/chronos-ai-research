@@ -20,9 +20,9 @@ export function RightSidebar({
   children,
 }: RightSidebarProps) {
   return (
-    <aside className="w-80 flex flex-col overflow-hidden bg-[#1E222D]">
+    <aside className="w-80 flex flex-col overflow-hidden bg-background-elevated">
       {/* Score & Direction Section */}
-      <div className="p-5 border-b border-[#2A2E39]" style={{ background: "#0A0C10" }}>
+      <div className="p-5 border-b border-border-default" style={{ background: "var(--bg-base)" }}>
         <div style={{ display: "flex", gap: 16 }}>
           {/* Score Ring */}
           <div>
@@ -60,7 +60,7 @@ export function RightSidebar({
             </div>
 
             {/* Divider */}
-            <div style={{ height: 1, background: "#1C1E24", margin: "4px 0" }} />
+            <div style={{ height: 1, background: "var(--border-subtle)", margin: "4px 0" }} />
 
             {/* MTF Alignment */}
             <div>
@@ -96,7 +96,7 @@ export function RightSidebar({
             </div>
 
             {/* Divider */}
-            <div style={{ height: 1, background: "#1C1E24", margin: "4px 0" }} />
+            <div style={{ height: 1, background: "var(--border-subtle)", margin: "4px 0" }} />
 
             {/* Conviction */}
             <div>
@@ -139,14 +139,14 @@ export function RightSidebar({
       </div>
 
       {/* Tabs */}
-      <div className="grid grid-cols-3 border-b border-[#2A2E39]">
+      <div className="grid grid-cols-3 border-b border-border-default">
         {["ANALYSIS", "STRUCTURE", "HISTORY"].map((tab) => (
           <button
             key={tab}
             onClick={() => onTabChange(tab as "ANALYSIS" | "STRUCTURE" | "HISTORY")}
             className="h-9 text-[9px] uppercase tracking-[0.1em] border-b"
             style={{
-              color: activeTab === tab ? "#F5A623" : "#787B86",
+              color: activeTab === tab ? "#F5A623" : "var(--text-dim)",
               borderBottomColor: activeTab === tab ? "#F5A623" : "transparent",
               fontFamily: '"IBM Plex Mono", monospace',
               fontWeight: activeTab === tab ? 600 : 400,
@@ -161,7 +161,7 @@ export function RightSidebar({
       <div className="flex-1 overflow-auto p-4">{children}</div>
 
       {/* Footer Action */}
-      <div className="p-3 border-t border-[#1C1E24]" style={{ background: "#0A0C10" }}>
+      <div className="p-3 border-t border-[var(--border-subtle)]" style={{ background: "var(--bg-base)" }}>
         <button
           style={{
             width: "100%",

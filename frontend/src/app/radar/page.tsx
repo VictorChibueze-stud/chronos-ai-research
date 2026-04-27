@@ -23,14 +23,14 @@ function accentColor(setup: SetupSummary): string {
 }
 
 function StatSkeleton() {
-  return <div className="skeleton-bar h-[68px] border border-[#2A2E39]" />;
+  return <div className="skeleton-bar h-[68px] border border-border-default" />;
 }
 
 function HeatmapSkeleton() {
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2">
       {Array.from({ length: 24 }).map((_, idx) => (
-        <div key={idx} className="skeleton-bar h-[72px] border border-[#2A2E39]" />
+        <div key={idx} className="skeleton-bar h-[72px] border border-border-default" />
       ))}
     </div>
   );
@@ -93,13 +93,13 @@ function RadarContent() {
 
   return (
     <div
-      className="flex h-full flex-1 flex-col overflow-hidden bg-[#131722] px-4 pb-4 pt-3"
+      className="flex h-full flex-1 flex-col overflow-hidden bg-background-surface px-4 pb-4 pt-3"
       style={{ fontFamily: '"IBM Plex Mono", monospace' }}
     >
-      <div className="mb-3 flex items-end justify-between border-b border-[#2A2E39] pb-2">
+      <div className="mb-3 flex items-end justify-between border-b border-border-default pb-2">
         <div>
-          <h1 className="text-sm font-bold uppercase tracking-[0.16em] text-[#D1D4DC]">GLOBAL RADAR</h1>
-          <p className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[#787B86]">MARKET BREADTH OVERVIEW</p>
+          <h1 className="text-sm font-bold uppercase tracking-[0.16em] text-text-primary">GLOBAL RADAR</h1>
+          <p className="mt-1 text-[10px] uppercase tracking-[0.12em] text-text-dim">MARKET BREADTH OVERVIEW</p>
         </div>
       </div>
 
@@ -112,28 +112,28 @@ function RadarContent() {
         </div>
       ) : (
         <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-4">
-          <div className="border border-[#2A2E39] bg-[#1E222D] px-3 py-2">
-            <div className="text-[9px] uppercase tracking-[0.12em] text-[#787B86]">TRENDING UP</div>
+          <div className="border border-border-default bg-background-elevated px-3 py-2">
+            <div className="text-[9px] uppercase tracking-[0.12em] text-text-dim">TRENDING UP</div>
             <div className="mt-1 text-xl font-bold text-[#089981]">{counts.up}</div>
           </div>
-          <div className="border border-[#2A2E39] bg-[#1E222D] px-3 py-2">
-            <div className="text-[9px] uppercase tracking-[0.12em] text-[#787B86]">TRENDING DOWN</div>
+          <div className="border border-border-default bg-background-elevated px-3 py-2">
+            <div className="text-[9px] uppercase tracking-[0.12em] text-text-dim">TRENDING DOWN</div>
             <div className="mt-1 text-xl font-bold text-[#F23645]">{counts.down}</div>
           </div>
-          <div className="border border-[#2A2E39] bg-[#1E222D] px-3 py-2">
-            <div className="text-[9px] uppercase tracking-[0.12em] text-[#787B86]">MONITORED</div>
-            <div className="mt-1 text-xl font-bold text-[#D1D4DC]">{monitored}</div>
+          <div className="border border-border-default bg-background-elevated px-3 py-2">
+            <div className="text-[9px] uppercase tracking-[0.12em] text-text-dim">MONITORED</div>
+            <div className="mt-1 text-xl font-bold text-text-primary">{monitored}</div>
           </div>
-          <div className="border border-[#2A2E39] bg-[#1E222D] px-3 py-2">
-            <div className="text-[9px] uppercase tracking-[0.12em] text-[#787B86]">CAPACITY</div>
+          <div className="border border-border-default bg-background-elevated px-3 py-2">
+            <div className="text-[9px] uppercase tracking-[0.12em] text-text-dim">CAPACITY</div>
             <div className="mt-1 text-xl font-bold text-[#F5A623]">{capacityCurrent}/50</div>
           </div>
         </div>
       )}
 
       <div className="grid min-h-0 flex-1 grid-rows-[3fr_2fr] gap-3 overflow-hidden">
-        <section className="min-h-0 border border-[#2A2E39] bg-[#1E222D] p-3">
-          <div className="mb-2 text-[10px] uppercase tracking-[0.12em] text-[#787B86]">THE BREADTH HEATMAP</div>
+        <section className="min-h-0 border border-border-default bg-background-elevated p-3">
+          <div className="mb-2 text-[10px] uppercase tracking-[0.12em] text-text-dim">THE BREADTH HEATMAP</div>
           <div className="h-[calc(100%-20px)] overflow-auto pr-1">
             {isLoading ? (
               <HeatmapSkeleton />
@@ -146,18 +146,18 @@ function RadarContent() {
                 {setups.map((setup) => (
                   <div
                     key={`${setup.symbol}-${setup.timeframe}`}
-                    className="relative h-[72px] border border-[#2A2E39] bg-[#1E222D] px-2 py-2"
+                    className="relative h-[72px] border border-border-default bg-background-elevated px-2 py-2"
                     style={{ borderLeft: `4px solid ${accentColor(setup)}` }}
                   >
-                    <div className="truncate text-[12px] font-bold text-[#D1D4DC]">{setup.symbol}</div>
-                    <div className="mt-4 text-[9px] uppercase tracking-[0.08em] text-[#787B86]">{setup.category}</div>
-                    <div className="absolute bottom-1 right-2 text-[11px] text-[#787B86]">{formatScore(setup.trend_score)}</div>
+                    <div className="truncate text-[12px] font-bold text-text-primary">{setup.symbol}</div>
+                    <div className="mt-4 text-[9px] uppercase tracking-[0.08em] text-text-dim">{setup.category}</div>
+                    <div className="absolute bottom-1 right-2 text-[11px] text-text-dim">{formatScore(setup.trend_score)}</div>
                   </div>
                 ))}
                 {Array.from({ length: placeholderCount }).map((_, idx) => (
                   <div
                     key={`empty-${idx}`}
-                    className="flex h-[72px] items-center justify-center border border-dashed border-[#1C1E24] bg-[#0D0F14] text-xl text-[#2A2E39]"
+                    className="flex h-[72px] items-center justify-center border border-dashed border-[var(--border-subtle)] bg-background-base text-xl text-[var(--border-default)]"
                   >
                     —
                   </div>
@@ -168,8 +168,8 @@ function RadarContent() {
         </section>
 
         <section className="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-2">
-          <div className="min-h-0 border border-[#2A2E39] bg-[#1E222D] p-3">
-            <div className="mb-3 text-[10px] uppercase tracking-[0.12em] text-[#787B86]">CATEGORY DISTRIBUTION</div>
+          <div className="min-h-0 border border-border-default bg-background-elevated p-3">
+            <div className="mb-3 text-[10px] uppercase tracking-[0.12em] text-text-dim">CATEGORY DISTRIBUTION</div>
             <div className="space-y-3">
               {CATEGORIES.map((category) => {
                 const value = counts.byCategory[category];
@@ -177,16 +177,16 @@ function RadarContent() {
                 const isZero = value === 0;
                 return (
                   <div key={category}>
-                    <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-[0.08em] text-[#787B86]">
+                    <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-[0.08em] text-text-dim">
                       <span>{category}</span>
                       <span>{value}</span>
                     </div>
-                    <div className="h-2 w-full bg-[#131722]">
+                    <div className="h-2 w-full bg-background-surface">
                       <div
                         className="h-2"
                         style={{
                           width: `${width}%`,
-                          backgroundColor: isZero ? "#2A2E39" : "#F5A623",
+                          backgroundColor: isZero ? "var(--border-default)" : "#F5A623",
                         }}
                       />
                     </div>
@@ -196,25 +196,25 @@ function RadarContent() {
             </div>
           </div>
 
-          <div className="min-h-0 border border-[#2A2E39] bg-[#1E222D] p-3">
-            <div className="mb-3 text-[10px] uppercase tracking-[0.12em] text-[#787B86]">PHASE DISTRIBUTION</div>
+          <div className="min-h-0 border border-border-default bg-background-elevated p-3">
+            <div className="mb-3 text-[10px] uppercase tracking-[0.12em] text-text-dim">PHASE DISTRIBUTION</div>
             <div className="mb-3 grid grid-cols-2 gap-2">
-              <div className="border border-[#2A2E39] bg-[#131722] px-3 py-2">
-                <div className="text-[9px] uppercase tracking-[0.08em] text-[#787B86]">IMPULSE</div>
+              <div className="border border-border-default bg-background-surface px-3 py-2">
+                <div className="text-[9px] uppercase tracking-[0.08em] text-text-dim">IMPULSE</div>
                 <div className="mt-1 text-xl font-bold text-[#F5A623]">{counts.monitoring}</div>
               </div>
-              <div className="border border-[#2A2E39] bg-[#131722] px-3 py-2">
-                <div className="text-[9px] uppercase tracking-[0.08em] text-[#787B86]">SCANNING</div>
-                <div className="mt-1 text-xl font-bold text-[#787B86]">{counts.scanning}</div>
+              <div className="border border-border-default bg-background-surface px-3 py-2">
+                <div className="text-[9px] uppercase tracking-[0.08em] text-text-dim">SCANNING</div>
+                <div className="mt-1 text-xl font-bold text-text-dim">{counts.scanning}</div>
               </div>
             </div>
 
-            <div className="flex h-3 w-full overflow-hidden border border-[#2A2E39] bg-[#131722]">
+            <div className="flex h-3 w-full overflow-hidden border border-border-default bg-background-surface">
               <div className="h-full bg-[#F5A623]" style={{ width: `${monitoringRatio}%` }} />
-              <div className="h-full bg-[#2A2E39]" style={{ width: `${100 - monitoringRatio}%` }} />
+              <div className="h-full bg-[var(--border-default)]" style={{ width: `${100 - monitoringRatio}%` }} />
             </div>
 
-            <div className="mt-2 text-[10px] uppercase tracking-[0.08em] text-[#787B86]">
+            <div className="mt-2 text-[10px] uppercase tracking-[0.08em] text-text-dim">
               {counts.monitoring} of {monitored} setups in active monitoring
             </div>
           </div>

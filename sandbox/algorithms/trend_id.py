@@ -297,7 +297,8 @@ def identify_trend(
             })
             break
 
-        slope = (best["price"] - current_start["price"]) / (best["index"] - current_start["index"])
+        idx_delta = best["index"] - current_start["index"]
+        slope = (best["price"] - current_start["price"]) / idx_delta if idx_delta != 0 else 0.0
         
         legs.append({
             "type": "impulse" if phase_is_impulse else "retracement",

@@ -41,14 +41,14 @@ interface UniverseDashboardProps {
 function trendTone(trend: Setup["trend"]): string {
   if (trend === "up") return "#00C853";
   if (trend === "down") return "#FF1744";
-  return "#787B86";
+  return "var(--text-dim)";
 }
 
 function readinessDotColor(state: Setup["readiness_state"] | undefined): string {
   if (state === "FULL") return "#26A69A";
   if (state === "PARTIAL") return "#F5A623";
   if (state === "ERROR") return "#EF5350";
-  return "#787B86";
+  return "var(--text-dim)";
 }
 
 function setupCardKey(setup: Setup, index: number): string {
@@ -61,12 +61,12 @@ function setupCardKey(setup: Setup, index: number): string {
 function rankDisplay(setup: Setup): { text: string; color: string } {
   const r = setup.universe_rank;
   if (r == null || !Number.isFinite(Number(r))) {
-    return { text: "—", color: "#434651" };
+    return { text: "—", color: "var(--text-dim)" };
   }
   const n = Math.floor(Number(r));
   return {
     text: `#${n}`,
-    color: n >= 1 && n <= 50 ? "#F5A623" : "#D1D4DC",
+    color: n >= 1 && n <= 50 ? "#F5A623" : "var(--text-primary)",
   };
 }
 
@@ -203,22 +203,22 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
   }
 
   return (
-    <div className="flex h-full flex-1 flex-col overflow-auto bg-[#131722] p-4 text-[#D1D4DC]">
-      <div className="mb-4 border-b border-[#363A45] pb-3">
-        <h1 className="text-sm font-bold uppercase tracking-[0.16em] text-[#D1D4DC]">UNIVERSE</h1>
-        <p className="mt-1 text-[10px] uppercase tracking-[0.12em] text-[#787B86]">MARKET BREADTH DASHBOARD</p>
+    <div className="flex h-full flex-1 flex-col overflow-auto bg-background-surface p-4 text-text-primary">
+      <div className="mb-4 border-b border-border-strong pb-3">
+        <h1 className="text-sm font-bold uppercase tracking-[0.16em] text-text-primary">UNIVERSE</h1>
+        <p style={{ marginTop: 4, fontFamily: "var(--font-sans)", fontSize: 11, fontWeight: 500, color: "var(--text-secondary)", letterSpacing: "0.08em", textTransform: "uppercase" }}>MARKET BREADTH DASHBOARD</p>
         {lastRankedIso ? (
-          <p className="mt-1 font-mono text-[9px] uppercase tracking-[0.1em] text-[#434651]">
+          <p style={{ marginTop: 4, fontFamily: "var(--font-sans)", fontSize: 11, color: "var(--text-dim)" }}>
             Last ranked:{" "}
             <RelativeTimeWithTooltip iso={lastRankedIso} className="uppercase tracking-[0.1em]" />
           </p>
         ) : null}
       </div>
 
-      <section className="mb-4 grid grid-cols-4 gap-1 bg-[#080A0E] pt-1">
+      <section className="mb-4 grid grid-cols-4 gap-1 bg-background-base pt-1">
         <StatCard label="TOTAL MONITORED" value={formatLocaleInt(stats.total_monitored)} highlight />
-        <div className="flex-1 border border-[#1C1E24] border-t border-t-[#1C1E24] bg-[#111318] px-[18px] py-[14px]">
-          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-[#4A4D58]">CATEGORY BREAKDOWN</div>
+        <div className="flex-1 border border-[var(--border-default)] border-t border-t-[var(--border-default)] bg-[var(--bg-surface)] px-[18px] py-[14px]">
+          <div style={{ marginBottom: 8, fontFamily: "var(--font-sans)", fontSize: 11, fontWeight: 500, color: "var(--text-secondary)", letterSpacing: "0.06em", textTransform: "uppercase" }}>CATEGORY BREAKDOWN</div>
           <div className="mt-3 space-y-2">
             {UNIVERSE_CATEGORY_ORDER.map((category) => {
               const count = categoryCounts[category] ?? 0;
@@ -226,10 +226,10 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
               return (
                 <div key={category}>
                   <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-[0.08em]">
-                    <span className="text-[#787B86]">{formatUniverseCategoryLabel(category)}</span>
-                    <span className="text-[#D1D4DC]">{formatLocaleInt(count)}</span>
+                    <span style={{ color: "var(--text-secondary)" }}>{formatUniverseCategoryLabel(category)}</span>
+                    <span className="text-text-primary">{formatLocaleInt(count)}</span>
                   </div>
-                  <div className="h-[3px] w-full bg-[#1C1E24]">
+                  <div className="h-[3px] w-full bg-[var(--border-subtle)]">
                     <div className="h-[3px] bg-[#F5A623]" style={{ width: `${ratio}%` }} />
                   </div>
                 </div>
@@ -249,11 +249,11 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
         </Tooltip>
       </section>
 
-      <section className="mb-4 border border-[#363A45] bg-[#1E222D] p-4">
-        <div className="border-b border-[#363A45] pb-3 text-[10px] uppercase tracking-[0.12em] text-[#787B86]">
+      <section className="mb-4 border border-border-strong bg-background-elevated p-4">
+        <div style={{ borderBottom: "1px solid var(--border-strong)", paddingBottom: 12, fontFamily: "var(--font-sans)", fontSize: 11, fontWeight: 500, color: "var(--text-secondary)", letterSpacing: "0.06em", textTransform: "uppercase" }}>
           MARKET DISTRIBUTION
         </div>
-        <p className="mt-2 font-mono text-[9px] leading-relaxed tracking-[0.08em] text-[#434651]">
+        <p style={{ marginTop: 8, fontFamily: "var(--font-sans)", fontSize: 9, lineHeight: 1.6, letterSpacing: "0.08em", color: "var(--text-dim)" }}>
           By category and readiness (full / partial / error / unscanned)
         </p>
         <div className="mt-3 h-[220px] w-full">
@@ -264,27 +264,27 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
               margin={{ top: 4, right: 8, left: 4, bottom: 4 }}
               barCategoryGap={6}
             >
-              <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" horizontal={false} />
-              <XAxis type="number" stroke="#434651" tick={{ fill: "#434651", fontSize: 9 }} allowDecimals={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-default)" horizontal={false} />
+              <XAxis type="number" stroke="var(--text-muted)" tick={{ fill: "var(--text-dim)", fontSize: 9 }} allowDecimals={false} />
               <YAxis
                 type="category"
                 dataKey="label"
                 width={72}
-                stroke="#787B86"
-                tick={{ fill: "#787B86", fontSize: 9 }}
+                stroke="var(--text-dim)"
+                tick={{ fill: "var(--text-dim)", fontSize: 9 }}
               />
               <RechartsTooltip
                 contentStyle={{
-                  background: "#0D0F14",
-                  border: "1px solid #363A45",
+                  background: "var(--bg-base)",
+                  border: "1px solid var(--border-strong)",
                   borderRadius: 0,
                   fontSize: 10,
                   fontFamily: "'IBM Plex Mono', monospace",
                 }}
-                labelStyle={{ color: "#D1D4DC" }}
+                labelStyle={{ color: "var(--text-primary)" }}
               />
               <Legend
-                wrapperStyle={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: "#787B86" }}
+                wrapperStyle={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: "var(--text-dim)" }}
               />
               {(["FULL", "PARTIAL", "ERROR", "UNSCANNED"] as ReadinessStackKey[]).map((key) => (
                 <Bar
@@ -301,9 +301,9 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
         </div>
       </section>
 
-      <section className="mb-4 border border-[#363A45] bg-[#1E222D] p-4">
-        <div style={{ fontSize: 9, letterSpacing: "0.14em", color: "#434651" }}>SCAN COVERAGE</div>
-        <div style={{ marginTop: 4, fontSize: 9, color: "#2A2E39" }}>
+      <section className="mb-4 border border-border-strong bg-background-elevated p-4">
+        <div style={{ fontFamily: "var(--font-sans)", fontSize: 11, fontWeight: 500, color: "var(--text-secondary)", letterSpacing: "0.06em", textTransform: "uppercase" }}>SCAN COVERAGE</div>
+        <div style={{ marginTop: 4, fontFamily: "var(--font-sans)", fontSize: 9, color: "var(--text-dim)" }}>
           Top 350 Binance + all Deriv · readiness dot: full / partial / error / unscanned
         </div>
         <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
@@ -313,38 +313,38 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
             { label: "NOT SELECTED", value: notSelectedCount },
             { label: "NO SETUP ROW", value: placeholderRowCount },
           ].map((item) => (
-            <div key={item.label} style={{ border: "1px solid #1E222D", background: "#131722", padding: "10px 8px", textAlign: "center" }}>
-              <div style={{ fontSize: 20, fontWeight: 700, color: "#434651", lineHeight: 1 }}>
+            <div key={item.label} style={{ border: "1px solid var(--border-default)", background: "var(--bg-surface)", padding: "10px 8px", textAlign: "center" }}>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 28, fontWeight: 700, color: "var(--text-primary)", lineHeight: 1 }}>
                 {item.value}
               </div>
-              <div style={{ marginTop: 6, fontSize: 8, color: "#2A2E39", letterSpacing: "0.08em" }}>
+              <div style={{ marginTop: 6, fontFamily: "var(--font-sans)", fontSize: 9, color: "var(--text-secondary)", letterSpacing: "0.08em" }}>
                 {item.label}
               </div>
             </div>
           ))}
         </div>
-        <div style={{ marginTop: 8, fontSize: 9, color: "#1E222D", textAlign: "center" }}>
+        <div style={{ marginTop: 8, fontFamily: "var(--font-sans)", fontSize: 9, color: "var(--text-muted)", textAlign: "center" }}>
           Click SCAN ALL on the Scanner page to refresh the full universe
         </div>
       </section>
 
-      <section className="border border-[#363A45] bg-[#1E222D] p-4">
+      <section className="border border-border-strong bg-background-elevated p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="text-[10px] uppercase tracking-[0.12em] text-[#787B86]">Category Heatmap</div>
+          <div className="text-[10px] uppercase tracking-[0.12em] text-text-dim">Category Heatmap</div>
           <div className="flex gap-1">
             <button
               type="button"
               onClick={collapseAllHeatmap}
-              className="font-mono text-[9px] uppercase tracking-[0.08em] text-[#434651] hover:text-[#787B86]"
-              style={{ border: "1px solid #1E222D", background: "transparent", padding: "2px 8px", cursor: "pointer" }}
+              className="font-mono text-[9px] uppercase tracking-[0.08em] hover:text-text-dim"
+              style={{ border: "1px solid var(--border-default)", background: "transparent", padding: "2px 8px", cursor: "pointer", color: "var(--text-dim)" }}
             >
               COLLAPSE ALL
             </button>
             <button
               type="button"
               onClick={expandAllHeatmap}
-              className="font-mono text-[9px] uppercase tracking-[0.08em] text-[#434651] hover:text-[#787B86]"
-              style={{ border: "1px solid #1E222D", background: "transparent", padding: "2px 8px", cursor: "pointer" }}
+              className="font-mono text-[9px] uppercase tracking-[0.08em] hover:text-text-dim"
+              style={{ border: "1px solid var(--border-default)", background: "transparent", padding: "2px 8px", cursor: "pointer", color: "var(--text-dim)" }}
             >
               EXPAND ALL
             </button>
@@ -358,10 +358,10 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
                 style={{
                   fontSize: 9,
                   padding: "2px 8px",
-                  border: "1px solid #1E222D",
+                  border: "1px solid var(--border-default)",
                   borderRadius: 0,
                   background: phaseFilter === opt ? "#F5A623" : "transparent",
-                  color: phaseFilter === opt ? "#0B0D11" : "#434651",
+                  color: phaseFilter === opt ? "var(--bg-base)" : "var(--text-dim)",
                   cursor: "pointer",
                   fontFamily: "'IBM Plex Mono', monospace",
                   letterSpacing: "0.08em",
@@ -371,19 +371,19 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
               </button>
             </Tooltip>
           ))}
-          <span style={{ color: "#2A2D36", fontSize: 9, margin: "0 4px" }}>|</span>
+          <span style={{ color: "var(--border-default)", fontSize: 9, margin: "0 4px" }}>|</span>
           <Tooltip content="Sort universe heatmap cards">
             <select
               value={heatmapSort}
               onChange={(e) => setHeatmapSort(e.target.value)}
               style={{
-                background: "#0D0F14",
-                color: "#434651",
-                border: "1px solid #1E222D",
+                background: "var(--bg-surface)",
+                color: "var(--text-dim)",
+                border: "1px solid var(--border-default)",
                 borderRadius: 0,
                 fontSize: 9,
                 padding: "2px 8px",
-                fontFamily: "'IBM Plex Mono', monospace",
+                fontFamily: "var(--font-mono)",
                 letterSpacing: "0.08em",
                 cursor: "pointer",
                 appearance: "none",
@@ -391,13 +391,13 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
               }}
             >
               {["SCORE \u2193", "SCORE \u2191", "SYMBOL A-Z", "DEPTH \u2193"].map((opt) => (
-                <option key={opt} value={opt} style={{ background: "#0D0F14", color: "#D1D4DC" }}>
+                <option key={opt} value={opt} style={{ background: "var(--bg-base)", color: "var(--text-primary)" }}>
                   {opt}
                 </option>
               ))}
             </select>
           </Tooltip>
-          <span style={{ color: "#2A2D36", fontSize: 9, margin: "0 4px" }}>|</span>
+          <span style={{ color: "var(--border-default)", fontSize: 9, margin: "0 4px" }}>|</span>
           {["ALL DEPTHS", "1", "2", "3"].map((opt) => (
             <Tooltip key={opt} content={`Filter by depth ${opt}`}>
               <button
@@ -405,10 +405,10 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
                 style={{
                   fontSize: 9,
                   padding: "2px 8px",
-                  border: "1px solid #1E222D",
+                  border: "1px solid var(--border-default)",
                   borderRadius: 0,
                   background: depthFilter === opt ? "#F5A623" : "transparent",
-                  color: depthFilter === opt ? "#0B0D11" : "#434651",
+                  color: depthFilter === opt ? "var(--bg-base)" : "var(--text-dim)",
                   cursor: "pointer",
                   fontFamily: "'IBM Plex Mono', monospace",
                   letterSpacing: "0.08em",
@@ -438,7 +438,7 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
                 <button
                   type="button"
                   onClick={() => setCategoryCollapsed(category, !collapsed)}
-                  className="mb-2 flex w-full items-center gap-1 text-left text-[10px] uppercase tracking-[0.12em] text-[#787B86] hover:text-[#D1D4DC]"
+                  className="mb-2 flex w-full items-center gap-1 text-left text-[10px] uppercase tracking-[0.12em] text-text-dim hover:text-text-primary"
                 >
                   {collapsed ? (
                     <ChevronRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -446,7 +446,7 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
                     <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
                   )}
                   <span>{formatUniverseCategoryLabel(category)}</span>
-                  <span className="ml-auto font-mono text-[9px] text-[#434651]">({filteredRows.length})</span>
+                  <span className="ml-auto font-mono text-[9px]" style={{ color: "var(--text-dim)" }}>({filteredRows.length})</span>
                 </button>
                 {!collapsed ? (
                   <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3">
@@ -462,17 +462,17 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
                       return (
                         <div
                           key={setupCardKey(setup, index)}
-                          className="border border-[#363A45] bg-[#2A2E39] p-3"
+                          className="border border-border-default bg-[var(--bg-surface)] p-3"
                           onMouseEnter={() => setHoveredSymbol(setup.symbol)}
                           onMouseLeave={() => setHoveredSymbol(null)}
                           onClick={() =>
                             router.push(`/market?symbol=${encodeURIComponent(setup.symbol)}&timeframe=1h`)
                           }
                           style={{
-                            borderLeft: setup.current_phase === "retracement" ? "2px solid #F5A623" : "1px solid #363A45",
+                            borderLeft: setup.current_phase === "retracement" ? "2px solid #F5A623" : "1px solid var(--border-default)",
                             borderStyle: isPlaceholder ? "dashed" : "solid",
                             cursor: "pointer",
-                            background: hoveredSymbol === setup.symbol ? "#323744" : "#2A2E39",
+                            background: hoveredSymbol === setup.symbol ? "var(--bg-hover)" : "var(--bg-surface)",
                             transition: "background 0.12s ease",
                           }}
                         >
@@ -501,8 +501,8 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
                                 style={{
                                   fontSize: 8,
                                   padding: "1px 5px",
-                                  border: "1px solid #1C1E24",
-                                  color: "#787B86",
+                                  border: "1px solid var(--border-subtle)",
+                                  color: "var(--text-dim)",
                                   letterSpacing: "0.1em",
                                   fontFamily: "'IBM Plex Mono', monospace",
                                 }}
@@ -515,7 +515,7 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
                           </div>
                           <div className="flex items-start justify-between gap-3">
                             <div>
-                              <div className="flex items-center gap-1 text-[12px] font-semibold text-[#D1D4DC]">
+                              <div className="flex items-center gap-1 text-[12px] font-semibold text-text-primary">
                                 <span
                                   title={
                                     setup.readiness_state
@@ -528,14 +528,14 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
                                 <span>{setup.symbol}</span>
                                 {setup.fsm_state === "MONITORING" && <span style={{ color: "#F5A623" }}>●</span>}
                               </div>
-                              <div className="mt-1 text-[10px] uppercase tracking-[0.08em] text-[#787B86]">
+                              <div className="mt-1 text-[10px] uppercase tracking-[0.08em] text-text-dim">
                                 {setup.timeframe}
                                 {isPlaceholder ? (
-                                  <span className="ml-1 text-[#434651]">· PLACEHOLDER</span>
+                                  <span className="ml-1" style={{ color: "var(--text-dim)" }}>· PLACEHOLDER</span>
                                 ) : null}
                               </div>
                               {setup.readiness_state === "PARTIAL" && setup.readiness_coverage?.available?.length ? (
-                                <div style={{ marginTop: 2, fontSize: 9, color: "#A0A0A0", fontFamily: "'IBM Plex Mono', monospace" }}>
+                                <div style={{ marginTop: 2, fontSize: 9, color: "var(--text-secondary)", fontFamily: "'IBM Plex Mono', monospace" }}>
                                   {setup.readiness_coverage.available.join(" · ")}
                                 </div>
                               ) : null}
@@ -543,10 +543,10 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
                             <div className="h-3 w-3 rounded-full" style={{ background: trendTone(setup.trend) }} />
                           </div>
                           <div className="mt-3 flex items-center justify-between text-[10px] uppercase tracking-[0.08em]">
-                            <span className="text-[#787B86]">Trend</span>
+                            <span className="text-text-dim">Trend</span>
                             <span style={{ color: trendTone(setup.trend) }}>{setup.trend}</span>
                           </div>
-                          <div className="mt-2 text-right text-[10px] text-[#4A4D58]">{formatScore(setup.trend_score)}</div>
+                          <div className="mt-2 text-right text-[10px]" style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>{formatScore(setup.trend_score)}</div>
                           {loadingBootstrap ? (
                             <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
                               <div
@@ -554,7 +554,7 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
                                   width: 14,
                                   height: 14,
                                   borderRadius: "50%",
-                                  border: "2px solid #2A2D36",
+                                  border: "2px solid var(--border-default)",
                                   borderTopColor: "#F5A623",
                                   animation: "scanner-spin 0.8s linear infinite",
                                 }}
@@ -617,9 +617,9 @@ export function UniverseDashboard({ setups, stats, onSetupMerged, lastRankedIso 
                               style={{
                                 fontSize: 9,
                                 padding: "2px 6px",
-                                border: "1px solid #1C1E24",
+                                border: "1px solid var(--border-subtle)",
                                 background: isActive ? "#F5A623" : "transparent",
-                                color: isActive ? "#0D0F14" : "#787B86",
+                                color: isActive ? "var(--bg-base)" : "var(--text-dim)",
                                 letterSpacing: "0.08em",
                                 fontFamily: "'IBM Plex Mono', monospace",
                                 cursor: loadingBootstrap ? "wait" : "pointer",

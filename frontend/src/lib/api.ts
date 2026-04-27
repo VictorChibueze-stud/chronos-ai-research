@@ -24,6 +24,7 @@ import type {
   ScanStartResponse,
   IntegrationsStatusResponse,
   KillswitchResponse,
+  ManualRecomputeLayer,
   ManualOverride,
   SignalHistoryResponse,
   SymbolParamsResponse,
@@ -279,6 +280,32 @@ export const api = {
     }
     return [];
   },
+  /** Fetch at most `limit` most-recent candles. Pass 0 for all candles. */
+  getCandlesLimited: (
+    symbol: string,
+    timeframe: string,
+    limit: number,
+  ) => {
+    const params = new URLSearchParams({
+      timeframe,
+      limit: String(limit),
+    });
+    return request<CandleBar[]>(
+      `/api/candles/${encodeURIComponent(symbol)}?${params.toString()}`,
+    );
+  },
+  /** Lightweight metadata probe — candle count + earliest/latest timestamp. */
+  getCandlesInfo: (
+    symbol: string,
+    timeframe: string,
+  ) =>
+    request<{
+      count: number;
+      earliest: string | null;
+      latest: string | null;
+    }>(
+      `/api/candles/${encodeURIComponent(symbol)}/info?timeframe=${encodeURIComponent(timeframe)}`,
+    ),
   getScanSettings: () => request<ScanSettings>("/api/setups/scan-settings"),
   saveScanSettings: (payload: ScanSettings) =>
     request<ScanSettings>("/api/setups/scan-settings", {
@@ -342,7 +369,7 @@ export const api = {
         Omit<ManualOverride, "id" | "symbol" | "override_type" | "is_active" | "created_at" | "updated_at" | "reset_at">
       >,
   ) =>
-    request<{ status: string; override: ManualOverride }>(
+    request<{ status: string; override: ManualOverride; recompute_triggered: boolean }>(
       `/api/manual-structure-overrides/${encodeURIComponent(symbol)}`,
       {
         method: "POST",
@@ -351,14 +378,23 @@ export const api = {
       },
     ),
   resetManualStructureOverride: (symbol: string, override_type: string) =>
-    request<{ status: string; symbol: string; override_type: string; rows_deactivated: number }>(
+    request<{ status: string; symbol: string; override_type: string; rows_deactivated: number; recompute_triggered: boolean }>(
       `/api/manual-structure-overrides/${encodeURIComponent(symbol)}/${encodeURIComponent(override_type)}`,
       { method: "DELETE" },
     ),
   resetAllManualStructureOverrides: (symbol: string) =>
-    request<{ status: string; symbol: string; rows_deactivated: number }>(
+    request<{ status: string; symbol: string; rows_deactivated: number; recompute_triggered: boolean }>(
       `/api/manual-structure-overrides/${encodeURIComponent(symbol)}`,
       { method: "DELETE" },
+    ),
+  recomputeManualStructureOverrides: (symbol: string, layers?: ManualRecomputeLayer[]) =>
+    request<{ status: string; symbol: string; layers: ManualRecomputeLayer[]; recompute_triggered: boolean }>(
+      `/api/manual-structure-overrides/${encodeURIComponent(symbol)}/recompute`,
+      {
+        method: "POST",
+        body: JSON.stringify({ layers }),
+        headers: { "Content-Type": "application/json" },
+      },
     ),
   toggleKillswitch: () =>
     request<KillswitchResponse>("/api/system/killswitch", {

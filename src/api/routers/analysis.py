@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import json as _json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +38,7 @@ from src.core.choch_candidate_move import (
 )
 from src.core.trend_id import compute_internal_structure, identify_trend
 from src.db.models import (
+    AnalysisResultCache,
     CandidateImpulseCache,
     GlobalStructureCache,
     ManualStructureOverride,
@@ -71,6 +74,87 @@ FILTER_CONFIG: dict[str, Any] = dict(SCAN_AND_ANALYSIS_FILTER_DEFAULTS)
 # - symbol â†’ walk_structure(..., symbol=...) for adapter-routed TF deepening; optional deepening_timeframes.
 
 _DEFAULT_WALK_DEPTH = 3
+_DEFAULT_MIN_SWING_CANDLES = 3
+_DEFAULT_TREND_CONFIRMATION_PCT = 0.03
+
+
+def _iso_or_none(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
+
+
+def _layer_cache_timestamps(
+    symbol: str,
+    db: Session,
+    *,
+    gsc: GlobalStructureCache | None = None,
+    pis: Any | None = None,
+    walker: Any | None = None,
+    candidate: CandidateImpulseCache | None = None,
+) -> dict[str, str | None]:
+    global_row = gsc if gsc is not None else get_stored_global_structure(symbol, db)
+    prime_row = pis if pis is not None else get_stored_prime_impulse_structure(symbol, db)
+    walker_row = walker if walker is not None else get_stored_walker(symbol, db)
+    candidate_row = candidate if candidate is not None else get_stored_candidate_impulse(symbol, db)
+    return {
+        "global": _iso_or_none(getattr(global_row, "computed_at", None)),
+        "prime": _iso_or_none(getattr(prime_row, "computed_at", None)),
+        "walker": _iso_or_none(getattr(walker_row, "computed_at", None)),
+        "candidate": _iso_or_none(getattr(candidate_row, "computed_at", None)),
+    }
+
+
+def _analysis_cache_params_for_hash(
+    *,
+    min_swing_candles: int | None,
+    trend_confirmation_pct: float | None,
+    use_parent_relative_filter: bool | None,
+    min_impulse_parent_ratio: float | None,
+    use_momentum_filter: bool | None,
+    min_momentum_ratio: float | None,
+    use_dominance_filter: bool | None,
+    min_dominance_ratio: float | None,
+    max_walk_depth: int | None,
+    rmt_use_parent_relative_filter: bool | None,
+    rmt_min_impulse_parent_ratio: float | None,
+    rmt_use_momentum_filter: bool | None,
+    rmt_min_momentum_ratio: float | None,
+    rmt_use_dominance_filter: bool | None,
+    rmt_min_dominance_ratio: float | None,
+) -> dict[str, Any]:
+    """Stable dict for cache key: effective tuning only (no symbol/timeframe/request metadata)."""
+    trend_kw = dict(
+        _merge_trend_filter_kwargs(
+            min_swing_candles=min_swing_candles,
+            trend_confirmation_pct=trend_confirmation_pct,
+            use_parent_relative_filter=use_parent_relative_filter,
+            min_impulse_parent_ratio=min_impulse_parent_ratio,
+            use_momentum_filter=use_momentum_filter,
+            min_momentum_ratio=min_momentum_ratio,
+            use_dominance_filter=use_dominance_filter,
+            min_dominance_ratio=min_dominance_ratio,
+        )
+    )
+    trend_kw.setdefault("min_swing_candles", _DEFAULT_MIN_SWING_CANDLES)
+    trend_kw.setdefault("trend_confirmation_pct", _DEFAULT_TREND_CONFIRMATION_PCT)
+    rmt_kw = _merge_rmt_filter_kwargs(
+        rmt_use_parent_relative_filter=rmt_use_parent_relative_filter,
+        rmt_min_impulse_parent_ratio=rmt_min_impulse_parent_ratio,
+        rmt_use_momentum_filter=rmt_use_momentum_filter,
+        rmt_min_momentum_ratio=rmt_min_momentum_ratio,
+        rmt_use_dominance_filter=rmt_use_dominance_filter,
+        rmt_min_dominance_ratio=rmt_min_dominance_ratio,
+    )
+    rmt_eff = dict(rmt_kw) if rmt_kw is not None else dict(RMT_DEFAULT_FILTER_CONFIG)
+    walk_depth = _DEFAULT_WALK_DEPTH if max_walk_depth is None else max_walk_depth
+    return {
+        "trend": {k: trend_kw[k] for k in sorted(trend_kw.keys())},
+        "rmt": {k: rmt_eff[k] for k in sorted(rmt_eff.keys())},
+        "max_walk_depth": walk_depth,
+    }
 
 
 def _try_stored_walker_json(
@@ -1474,6 +1558,29 @@ def _compute_bos_classifications(
     return classifications
 
 
+def _attach_level_start_timestamps(
+    structural_state: dict[str, Any],
+    candles: list,
+) -> None:
+    """Attach level.start_timestamp from first_impulse_global_start for chart anchoring."""
+    if not structural_state or not candles:
+        return
+    levels = structural_state.get("levels")
+    if not isinstance(levels, list):
+        return
+    n = len(candles)
+    for level in levels:
+        if not isinstance(level, dict):
+            continue
+        if level.get("start_timestamp"):
+            continue
+        g_start = level.get("first_impulse_global_start")
+        if g_start is not None and 0 <= int(g_start) < n:
+            level["start_timestamp"] = candles[int(g_start)].timestamp.isoformat()
+        else:
+            level["start_timestamp"] = candles[0].timestamp.isoformat()
+
+
 def _get_open_paper_trade(
     symbol: str,
     db: Session,
@@ -1533,6 +1640,174 @@ def _get_active_overrides(
     return result
 
 
+def _params_hash(params: dict) -> str:
+    """Hash analysis params for cache invalidation when settings change."""
+    serialized = _json.dumps(params, sort_keys=True, default=str)
+    return hashlib.md5(serialized.encode()).hexdigest()[:16]
+
+
+def _get_cached_analysis(
+    symbol: str,
+    timeframe: str,
+    params: dict,
+    db: Session,
+) -> dict | None:
+    """Return cached analysis result when valid.
+
+    Cache is considered valid when a row exists for ``symbol+timeframe``,
+    the params hash matches the request, and the row is younger than
+    ``ttl_seconds``. Any other condition is a miss (returns ``None``).
+    """
+    row = (
+        db.query(AnalysisResultCache)
+        .filter(
+            AnalysisResultCache.symbol == symbol.strip().upper(),
+            AnalysisResultCache.timeframe == timeframe.lower(),
+        )
+        .first()
+    )
+    if row is None:
+        return None
+
+    current_hash = _params_hash(params)
+    if row.params_hash != current_hash:
+        logger.debug(
+            "Analysis cache miss (params changed) %s %s",
+            symbol,
+            timeframe,
+        )
+        return None
+
+    computed_at = row.computed_at
+    if computed_at.tzinfo is None:
+        computed_at = computed_at.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - computed_at).total_seconds()
+    if age > row.ttl_seconds:
+        logger.debug(
+            "Analysis cache miss (expired %ds) %s %s",
+            int(age),
+            symbol,
+            timeframe,
+        )
+        return None
+
+    logger.debug(
+        "Analysis cache hit %s %s (age=%ds)",
+        symbol,
+        timeframe,
+        int(age),
+    )
+    cached = dict(row.result_json)
+    cached["analysis_is_cached"] = True
+    cached["analysis_cache_age_seconds"] = int(age)
+    cached["analysis_computed_at"] = (
+        row.computed_at.isoformat() if row.computed_at else None
+    )
+    return cached
+
+
+def _write_analysis_cache(
+    symbol: str,
+    timeframe: str,
+    params: dict,
+    result: dict,
+    db: Session,
+    ttl_seconds: int = 14400,
+) -> None:
+    """Write or update the analysis result cache for ``symbol+timeframe``."""
+    sym = symbol.strip().upper()
+    tf = timeframe.lower()
+    phash = _params_hash(params)
+    now = datetime.now(timezone.utc)
+
+    existing = (
+        db.query(AnalysisResultCache)
+        .filter(
+            AnalysisResultCache.symbol == sym,
+            AnalysisResultCache.timeframe == tf,
+        )
+        .first()
+    )
+
+    if existing is None:
+        db.add(
+            AnalysisResultCache(
+                symbol=sym,
+                timeframe=tf,
+                result_json=result,
+                params_hash=phash,
+                computed_at=now,
+                ttl_seconds=ttl_seconds,
+            )
+        )
+    else:
+        existing.result_json = result
+        existing.params_hash = phash
+        existing.computed_at = now
+        existing.ttl_seconds = ttl_seconds
+
+    try:
+        db.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "Failed to write analysis cache %s %s: %s", sym, tf, e
+        )
+        db.rollback()
+
+
+def _invalidate_analysis_cache(
+    symbol: str,
+    db: Session,
+) -> None:
+    """Remove all cached analysis rows for ``symbol``.
+
+    Call this when the structure a row was computed from has changed:
+    rank universe rewriting the symbol, a manual override save, or any
+    explicit parameter change that must force a recompute.
+    """
+    sym = symbol.strip().upper()
+    db.query(AnalysisResultCache).filter(
+        AnalysisResultCache.symbol == sym
+    ).delete()
+    try:
+        db.commit()
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        logger.warning("Cache invalidation failed %s: %s", sym, e)
+
+
+def on_structure_updated(
+    symbol: str,
+    db: Session,
+) -> None:
+    """
+    Centralized hook called whenever structure
+    is successfully recomputed for a symbol.
+
+    Every code path that updates global structure,
+    score, or market state MUST call this function
+    instead of calling _invalidate_analysis_cache
+    directly.
+
+    Currently handles:
+    - Analysis result cache invalidation
+
+    Future hooks can be added here without
+    touching every call site.
+    """
+    try:
+        _invalidate_analysis_cache(symbol, db)
+        logger.debug(
+            "on_structure_updated: cache cleared "
+            "for %s", symbol
+        )
+    except Exception as e:
+        logger.warning(
+            "on_structure_updated failed for "
+            "%s: %s", symbol, e
+        )
+
+
 @router.get("/{symbol}")
 def get_analysis(
     symbol: str,
@@ -1565,6 +1840,37 @@ def get_analysis(
         rmt_min_momentum_ratio=rmt_min_momentum_ratio,
         rmt_min_dominance_ratio=rmt_min_dominance_ratio,
     )
+
+    symbol_upper = symbol.upper()
+    timeframe_lower = timeframe.lower()
+
+    analysis_cache_params = _analysis_cache_params_for_hash(
+        min_swing_candles=min_swing_candles,
+        trend_confirmation_pct=trend_confirmation_pct,
+        use_parent_relative_filter=use_parent_relative_filter,
+        min_impulse_parent_ratio=min_impulse_parent_ratio,
+        use_momentum_filter=use_momentum_filter,
+        min_momentum_ratio=min_momentum_ratio,
+        use_dominance_filter=use_dominance_filter,
+        min_dominance_ratio=min_dominance_ratio,
+        max_walk_depth=max_walk_depth,
+        rmt_use_parent_relative_filter=rmt_use_parent_relative_filter,
+        rmt_min_impulse_parent_ratio=rmt_min_impulse_parent_ratio,
+        rmt_use_momentum_filter=rmt_use_momentum_filter,
+        rmt_min_momentum_ratio=rmt_min_momentum_ratio,
+        rmt_use_dominance_filter=rmt_use_dominance_filter,
+        rmt_min_dominance_ratio=rmt_min_dominance_ratio,
+    )
+
+    # Cache short-circuit: the 4-hour refresh job (and the first miss) writes
+    # the full response here. All other requests read from cache so opening a
+    # market view is instant after the first compute.
+    cached = _get_cached_analysis(
+        symbol_upper, timeframe_lower, analysis_cache_params, db
+    )
+    if cached is not None:
+        return cached
+
     trend_kw = _merge_trend_filter_kwargs(
         min_swing_candles=min_swing_candles,
         trend_confirmation_pct=trend_confirmation_pct,
@@ -1587,9 +1893,6 @@ def get_analysis(
     walk_extras: dict[str, Any] = {"max_depth": walk_depth}
     if rmt_kw is not None:
         walk_extras["rmt_filter_config"] = rmt_kw
-
-    symbol_upper = symbol.upper()
-    timeframe_lower = timeframe.lower()
 
     setup = (
         db.query(MonitoredSetup)
@@ -1649,6 +1952,7 @@ def get_analysis(
                 **walk_extras,
             )
             state = serialize_state_report(state_report)
+        _attach_level_start_timestamps(state, candles)
 
         if _stored_walker_exists:
             new_move = None
@@ -1704,7 +2008,7 @@ def get_analysis(
             state, candles, str(gsc.trend_direction or result.get("trend") or "up")
         )
 
-        return {
+        result_dict = {
             "status": "ok",
             "symbol": symbol_upper,
             "timeframe": timeframe_lower,
@@ -1722,8 +2026,23 @@ def get_analysis(
             "market_state": (gsc.market_state if gsc is not None else "WAITING"),
             "open_paper_trade": _get_open_paper_trade(symbol_upper, db),
             "manual_overrides": _get_active_overrides(symbol_upper, db),
+            "layer_cache_timestamps": _layer_cache_timestamps(
+                symbol_upper,
+                db,
+                gsc=gsc,
+                pis=get_stored_prime_impulse_structure(symbol_upper, db),
+                walker=get_stored_walker(symbol_upper, db),
+                candidate=candidate_cache,
+            ),
             **leg_payload,
         }
+        result_dict["analysis_is_cached"] = False
+        result_dict["analysis_cache_age_seconds"] = 0
+        result_dict["analysis_computed_at"] = datetime.now(timezone.utc).isoformat()
+        _write_analysis_cache(
+            symbol_upper, timeframe_lower, analysis_cache_params, result_dict, db
+        )
+        return result_dict
 
     stored_tf = (setup.htf_timeframe or "").lower()
     if timeframe_lower == stored_tf:
@@ -1781,6 +2100,7 @@ def get_analysis(
                 **walk_extras,
             )
             state = serialize_state_report(state_report)
+        _attach_level_start_timestamps(state, leg_candles)
         max_depth_reached = int(state.get("max_depth_reached", 0) or 0)
         total_mitigation_count = int(state.get("total_mitigation_count", 0) or 0)
         waiting_for = state.get("waiting_for", "")
@@ -1843,7 +2163,7 @@ def get_analysis(
             state, leg_candles, str(global_trend or "up")
         )
 
-        return {
+        result_dict = {
             "status": "ok",
             "symbol": symbol_upper,
             "timeframe": setup.htf_timeframe,
@@ -1861,8 +2181,23 @@ def get_analysis(
             "market_state": (cache_bundle[2].market_state if cache_bundle is not None else "WAITING"),
             "open_paper_trade": _get_open_paper_trade(symbol_upper, db),
             "manual_overrides": _get_active_overrides(symbol_upper, db),
+            "layer_cache_timestamps": _layer_cache_timestamps(
+                symbol_upper,
+                db,
+                gsc=(cache_bundle[2] if cache_bundle is not None else None),
+                pis=get_stored_prime_impulse_structure(symbol_upper, db),
+                walker=get_stored_walker(symbol_upper, db),
+                candidate=candidate_cache,
+            ),
             **leg_payload,
         }
+        result_dict["analysis_is_cached"] = False
+        result_dict["analysis_cache_age_seconds"] = 0
+        result_dict["analysis_computed_at"] = datetime.now(timezone.utc).isoformat()
+        _write_analysis_cache(
+            symbol_upper, timeframe_lower, analysis_cache_params, result_dict, db
+        )
+        return result_dict
 
     try:
         candles = _get_candles_from_store(db, symbol_upper, timeframe_lower)
@@ -1915,6 +2250,7 @@ def get_analysis(
             **walk_extras,
         )
         state = serialize_state_report(state_report)
+    _attach_level_start_timestamps(state, candles)
     if _stored_walker_exists:
         new_move = None
     else:
@@ -1977,7 +2313,7 @@ def get_analysis(
         state, candles, str(global_trend or "up")
     )
 
-    return {
+    result_dict = {
         "status": "ok",
         "symbol": symbol_upper,
         "timeframe": timeframe_lower,
@@ -1995,5 +2331,20 @@ def get_analysis(
         "market_state": (cache_bundle[2].market_state if cache_bundle is not None else "WAITING"),
         "open_paper_trade": _get_open_paper_trade(symbol_upper, db),
         "manual_overrides": _get_active_overrides(symbol_upper, db),
+        "layer_cache_timestamps": _layer_cache_timestamps(
+            symbol_upper,
+            db,
+            gsc=(cache_bundle[2] if cache_bundle is not None else None),
+            pis=get_stored_prime_impulse_structure(symbol_upper, db),
+            walker=get_stored_walker(symbol_upper, db),
+            candidate=candidate_cache,
+        ),
         **leg_payload,
     }
+    result_dict["analysis_is_cached"] = False
+    result_dict["analysis_cache_age_seconds"] = 0
+    result_dict["analysis_computed_at"] = datetime.now(timezone.utc).isoformat()
+    _write_analysis_cache(
+        symbol_upper, timeframe_lower, analysis_cache_params, result_dict, db
+    )
+    return result_dict

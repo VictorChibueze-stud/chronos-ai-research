@@ -10,9 +10,9 @@ import type {
 import { Tooltip } from "@/components/ui/tooltip";
 
 const MONO = "'IBM Plex Mono', monospace";
-const BG = "#0D0F14";
-const SURFACE = "#111318";
-const BORDER = "#1E222D";
+const BG = "var(--bg-base)";
+const SURFACE = "var(--bg-elevated)";
+const BORDER = "var(--border-subtle)";
 
 const MARKET_STATES = [
   "WAITING",
@@ -35,7 +35,7 @@ function SectionTitle({ children }: { children: string }) {
         fontFamily: MONO,
         fontSize: 9,
         letterSpacing: "0.16em",
-        color: "#787B86",
+        color: "var(--text-dim)",
         textTransform: "uppercase",
         padding: "16px 20px 8px 20px",
         borderBottom: `1px solid ${BORDER}`,
@@ -59,7 +59,7 @@ function FieldLabel({
         fontFamily: MONO,
         fontSize: 8,
         letterSpacing: "0.1em",
-        color: "#4A4D58",
+        color: "var(--text-muted)",
         textTransform: "uppercase",
         marginBottom: 4,
         cursor: tooltip ? "help" : undefined,
@@ -98,9 +98,9 @@ function NumberInput({
       }}
       style={{
         width: "100%",
-        background: "#0A0C10",
+        background: "var(--bg-base)",
         border: `1px solid ${BORDER}`,
-        color: "#D1D4DC",
+        color: "var(--text-primary)",
         fontFamily: MONO,
         fontSize: 11,
         padding: "5px 8px",
@@ -127,9 +127,9 @@ function SelectInput({
       onChange={(e) => onChange(e.target.value)}
       style={{
         width: "100%",
-        background: "#0A0C10",
+        background: "var(--bg-base)",
         border: `1px solid ${BORDER}`,
-        color: "#D1D4DC",
+        color: "var(--text-primary)",
         fontFamily: MONO,
         fontSize: 10,
         padding: "5px 8px",
@@ -169,7 +169,7 @@ function ToggleSwitch({
         style={{
           fontFamily: MONO,
           fontSize: 8,
-          color: "#4A4D58",
+          color: "var(--text-muted)",
           letterSpacing: "0.1em",
           textTransform: "uppercase",
         }}
@@ -183,7 +183,7 @@ function ToggleSwitch({
           width: 32,
           height: 16,
           borderRadius: 8,
-          background: value ? "#F5A623" : "#1E222D",
+          background: value ? "#F5A623" : "var(--bg-elevated)",
           border: "none",
           cursor: "pointer",
           position: "relative",
@@ -196,7 +196,7 @@ function ToggleSwitch({
             width: 12,
             height: 12,
             borderRadius: "50%",
-            background: "#0D0F14",
+            background: "var(--bg-base)",
             position: "absolute",
             top: 2,
             left: value ? 18 : 2,
@@ -301,6 +301,7 @@ export default function RiskPage() {
   >({});
   const [notices, setNotices] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+  const [activeAccountTab, setActiveAccountTab] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -317,6 +318,8 @@ export default function RiskPage() {
           entry_timeframe: a.entry_timeframe,
           min_market_state: a.min_market_state,
           tp_mode: a.tp_mode,
+          entry_lookback_candles: a.entry_lookback_candles,
+          entry_check_interval_hours: a.entry_check_interval_hours,
           time_exit_days: a.time_exit_days,
         };
       }
@@ -347,6 +350,12 @@ export default function RiskPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (accounts.length > 0 && activeAccountTab === null) {
+      setActiveAccountTab(String(accounts[0].id));
+    }
+  }, [accounts, activeAccountTab]);
 
   const patchDraft = (
     id: number,
@@ -454,15 +463,46 @@ export default function RiskPage() {
       {/* SECTION 1 — ACCOUNT RISK CONFIGURATION */}
       <SectionTitle>ACCOUNT RISK CONFIGURATION</SectionTitle>
 
+      {/* Account tab bar */}
       <div
         style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
-          gap: 12,
-          padding: "12px 20px",
+          display: "flex",
+          borderBottom: `1px solid ${BORDER}`,
+          background: BG,
+          padding: "0 20px",
         }}
       >
         {accounts.map((account) => {
+          const isActive = activeAccountTab === String(account.id);
+          return (
+            <button
+              key={`tab-${account.id}`}
+              type="button"
+              onClick={() => setActiveAccountTab(String(account.id))}
+              style={{
+                padding: "10px 16px",
+                background: "transparent",
+                border: "none",
+                borderBottom: isActive ? "2px solid var(--amber)" : "2px solid transparent",
+                color: isActive ? "var(--amber)" : "var(--text-muted)",
+                fontFamily: "var(--font-sans)",
+                fontSize: 11,
+                fontWeight: isActive ? 600 : 400,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                cursor: "pointer",
+              }}
+            >
+              {account.name}
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={{ padding: "12px 20px" }}>
+        {accounts
+          .filter((account) => String(account.id) === activeAccountTab)
+          .map((account) => {
           const draft = drafts[account.id] ?? {};
           const perf = performances[account.id];
           const isPaused = account.is_paused_drawdown;
@@ -495,15 +535,15 @@ export default function RiskPage() {
                     style={{
                       fontSize: 13,
                       fontWeight: 700,
-                      color: "#D1D4DC",
+                      color: "var(--text-primary)",
                       marginBottom: 3,
                     }}
                   >
                     {account.name.toUpperCase()}
                   </div>
-                  <div style={{ fontSize: 9, color: "#4A4D58" }}>
-                    ${account.balance_usd.toLocaleString()}
-                    {" · "}
+                  <div style={{ fontSize: 9, color: "var(--text-dim)", marginTop: 2 }}>
+                    <span style={{ fontFamily: MONO }}>{account.balance_usd.toLocaleString("en-US", { maximumFractionDigits: 0 })}</span>
+                    {" USD · "}
                     {(account.universe ?? "")
                       .toUpperCase()
                       .replace("_", "-")}
@@ -553,7 +593,7 @@ export default function RiskPage() {
                   style={{
                     marginBottom: 14,
                     padding: "8px 10px",
-                    background: "#0A0C10",
+                    background: "var(--bg-base)",
                     border: `1px solid ${BORDER}`,
                     borderRadius: 2,
                   }}
@@ -568,7 +608,7 @@ export default function RiskPage() {
                     <span
                       style={{
                         fontSize: 8,
-                        color: "#4A4D58",
+                        color: "var(--text-muted)",
                         letterSpacing: "0.1em",
                       }}
                     >
@@ -580,7 +620,7 @@ export default function RiskPage() {
                         color:
                           currentDD > account.drawdown_limit_pct * 0.8
                             ? "#EF5350"
-                            : "#787B86",
+                            : "var(--text-dim)",
                       }}
                     >
                       {currentDD.toFixed(1)}% /{" "}
@@ -590,7 +630,7 @@ export default function RiskPage() {
                   <div
                     style={{
                       height: 3,
-                      background: "#1E222D",
+                      background: "var(--bg-elevated)",
                       borderRadius: 2,
                     }}
                   >
@@ -684,6 +724,44 @@ export default function RiskPage() {
                 </div>
 
                 <div>
+                  <FieldLabel tooltip="How many recent candles to check for an EMA crossover. Higher = more opportunities caught, lower = stricter entry timing.">
+                    ENTRY LOOKBACK (CANDLES)
+                  </FieldLabel>
+                  <NumberInput
+                    value={draft.entry_lookback_candles ?? 3}
+                    onChange={(v) =>
+                      patchDraft(
+                        account.id,
+                        "entry_lookback_candles",
+                        Math.round(v),
+                      )
+                    }
+                    min={1}
+                    max={10}
+                    step={1}
+                  />
+                </div>
+
+                <div>
+                  <FieldLabel tooltip="How often (in hours) the entry signal scheduler runs. 1 = every hour. Lower = more responsive to crossovers.">
+                    ENTRY CHECK (HOURS)
+                  </FieldLabel>
+                  <NumberInput
+                    value={draft.entry_check_interval_hours ?? 1}
+                    onChange={(v) =>
+                      patchDraft(
+                        account.id,
+                        "entry_check_interval_hours",
+                        v,
+                      )
+                    }
+                    min={0.5}
+                    max={4}
+                    step={0.5}
+                  />
+                </div>
+
+                <div>
                   <FieldLabel tooltip="Minimum market state required before entry">
                     MIN STATE
                   </FieldLabel>
@@ -737,7 +815,7 @@ export default function RiskPage() {
                     padding: "6px 16px",
                     background: "#F5A623",
                     border: "none",
-                    color: "#0D0F14",
+                    color: "var(--bg-base)",
                     fontFamily: MONO,
                     fontSize: 9,
                     letterSpacing: "0.1em",
@@ -770,7 +848,9 @@ export default function RiskPage() {
       <SectionTitle>PERFORMANCE TARGETS</SectionTitle>
 
       <div style={{ padding: "12px 20px" }}>
-        {accounts.map((account) => {
+        {accounts
+          .filter((account) => String(account.id) === activeAccountTab)
+          .map((account) => {
           const perf = performances[account.id];
           const tDraft = targetDrafts[account.id] ?? {};
           const targetNotice = notices[`t${account.id}`];
@@ -790,7 +870,7 @@ export default function RiskPage() {
                 style={{
                   fontSize: 11,
                   fontWeight: 700,
-                  color: "#D1D4DC",
+                  color: "var(--text-primary)",
                   marginBottom: 12,
                   display: "flex",
                   justifyContent: "space-between",
@@ -800,7 +880,7 @@ export default function RiskPage() {
                 <span
                   style={{
                     fontSize: 8,
-                    color: "#4A4D58",
+                    color: "var(--text-muted)",
                     fontWeight: 400,
                   }}
                 >
@@ -840,7 +920,7 @@ export default function RiskPage() {
                     <div
                       key={metric.key}
                       style={{
-                        background: "#0A0C10",
+                        background: "var(--bg-base)",
                         border: `1px solid ${BORDER}`,
                         borderRadius: 2,
                         padding: "8px 10px",
@@ -850,7 +930,7 @@ export default function RiskPage() {
                         <div
                           style={{
                             fontSize: 7,
-                            color: "#4A4D58",
+                            color: "var(--text-muted)",
                             letterSpacing: "0.1em",
                             marginBottom: 6,
                             cursor: "help",
@@ -873,7 +953,7 @@ export default function RiskPage() {
                             fontWeight: 700,
                             color:
                               met === null
-                                ? "#4A4D58"
+                                ? "var(--text-muted)"
                                 : met
                                 ? "#00C853"
                                 : "#EF5350",
@@ -888,7 +968,7 @@ export default function RiskPage() {
                             fontSize: 11,
                             color:
                               met === null
-                                ? "#2A2E39"
+                                ? "var(--border-default)"
                                 : met
                                 ? "#00C853"
                                 : "#EF5350",
@@ -901,7 +981,7 @@ export default function RiskPage() {
                         <div
                           style={{
                             fontSize: 7,
-                            color: "#2A2E39",
+                            color: "var(--border-default)",
                             marginBottom: 2,
                           }}
                         >
@@ -923,9 +1003,9 @@ export default function RiskPage() {
                           }}
                           style={{
                             width: "100%",
-                            background: "#0D0F14",
+                            background: "var(--bg-base)",
                             border: `1px solid ${BORDER}`,
-                            color: "#787B86",
+                            color: "var(--text-dim)",
                             fontFamily: MONO,
                             fontSize: 9,
                             padding: "3px 6px",
@@ -1022,7 +1102,7 @@ export default function RiskPage() {
                 key={h}
                 style={{
                   fontSize: 8,
-                  color: "#4A4D58",
+                  color: "var(--text-muted)",
                   letterSpacing: "0.1em",
                 }}
               >
@@ -1067,7 +1147,7 @@ export default function RiskPage() {
                     style={{
                       fontSize: 11,
                       fontWeight: 700,
-                      color: "#D1D4DC",
+                      color: "var(--text-primary)",
                     }}
                   >
                     {account.name.toUpperCase()}
@@ -1075,7 +1155,7 @@ export default function RiskPage() {
                   <div
                     style={{
                       fontSize: 8,
-                      color: "#4A4D58",
+                      color: "var(--text-muted)",
                       marginTop: 2,
                     }}
                   >
@@ -1084,8 +1164,8 @@ export default function RiskPage() {
                       .replace("_", "-")}
                   </div>
                 </div>
-                <div style={{ fontSize: 11, color: "#D1D4DC" }}>
-                  ${account.balance_usd.toLocaleString()}
+                <div style={{ fontFamily: MONO, fontSize: 11, color: "var(--text-primary)" }}>
+                  {account.balance_usd.toLocaleString("en-US", { maximumFractionDigits: 0 })}
                 </div>
                 <div
                   style={{
@@ -1096,7 +1176,7 @@ export default function RiskPage() {
                 >
                   {dd.toFixed(1)}%
                 </div>
-                <div style={{ fontSize: 11, color: "#787B86" }}>
+                <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
                   {limit}%
                 </div>
                 <div
@@ -1111,7 +1191,7 @@ export default function RiskPage() {
                 <div
                   style={{
                     height: 4,
-                    background: "#1E222D",
+                    background: "var(--bg-elevated)",
                     borderRadius: 2,
                   }}
                 >

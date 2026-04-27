@@ -1,34 +1,68 @@
 "use client";
 import "./globals.css";
-import { IBM_Plex_Mono } from "next/font/google";
+import {
+    IBM_Plex_Mono,
+    IBM_Plex_Sans,
+} from "next/font/google";
 import { usePathname } from "next/navigation";
-import { ChevronDown, ChevronUp, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { ChevronDown, ChevronUp, Moon, PanelLeftClose, PanelLeftOpen, Sun } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { CommandPalette } from "@/components/command-palette";
 import { AppSidebar } from "@/components/app-sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-const plexMono = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "500", "700"] });
+const plexMono = IBM_Plex_Mono({
+    subsets: ["latin"],
+    weight: ["400", "500", "700"],
+    variable: "--font-mono",
+});
+
+const plexSans = IBM_Plex_Sans({
+    subsets: ["latin"],
+    weight: ["400", "500", "600", "700"],
+    variable: "--font-sans",
+});
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [topbarHidden, setTopbarHidden] = useState(false);
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
 
   useEffect(() => {
     try {
       const sidebar = window.localStorage.getItem("ikenga.sidebarCollapsed");
       const topbar = window.localStorage.getItem("ikenga.topbarHidden");
+      const savedTheme = window.localStorage.getItem("ikenga.theme");
       if (sidebar !== null) {
         setSidebarCollapsed(sidebar === "true");
       }
       if (topbar !== null) {
         setTopbarHidden(topbar === "true");
       }
+      if (savedTheme === "light" || savedTheme === "dark") {
+        setTheme(savedTheme);
+      }
     } catch {
       // no-op if storage is unavailable
     }
   }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => {
+      const next = prev === "dark" ? "light" : "dark";
+      try {
+        window.localStorage.setItem("ikenga.theme", next);
+      } catch {
+        // no-op
+      }
+      return next;
+    });
+  };
 
   const toggleSidebar = () => {
     setSidebarCollapsed((prev) => {
@@ -70,37 +104,48 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     const words = text.trim().split(/\s+/).filter(Boolean);
     if (words.length <= 1) {
       return (
-        <span className="text-sm font-bold uppercase tracking-[0.14em] text-[#D1D4DC]">{words[0] ?? text}</span>
+        <span style={{ fontFamily: "var(--font-sans)", fontSize: 13, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-primary)" }}>{words[0] ?? text}</span>
       );
     }
     return (
-      <span className="text-sm font-bold uppercase tracking-[0.14em]">
+      <span style={{ fontFamily: "var(--font-sans)", fontSize: 13, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
         <span className="text-[#F5A623]">{words[0]}</span>
-        <span className="text-[#D1D4DC]"> {words.slice(1).join(" ")}</span>
+        <span style={{ color: "var(--text-primary)" }}> {words.slice(1).join(" ")}</span>
       </span>
     );
   }
 
   return (
     <html lang="en">
-      <body className={`${plexMono.className} flex h-screen w-screen overflow-hidden bg-[#131722] text-[#D1D4DC]`}>
+      <body className={`${plexMono.variable} ${plexSans.variable} flex h-screen w-screen overflow-hidden bg-[var(--bg-base)] text-[var(--text-primary)]`}>
         <TooltipProvider>
           <div className="relative flex flex-1 flex-col overflow-hidden">
             {!topbarHidden ? (
-              <header className="flex h-[52px] shrink-0 items-center justify-between border-b border-[#363A45] bg-[#1E222D] px-6 text-[#D1D4DC] shadow-[inset_0_-1px_0_0_rgba(54,58,69,0.6)]">
+              <header className="flex h-[52px] shrink-0 items-center justify-between border-b border-[var(--border-strong)] bg-[var(--bg-elevated)] px-6 text-[var(--text-primary)] shadow-[inset_0_-1px_0_0_rgba(54,58,69,0.6)]">
                 <div className="flex items-center gap-4">
                   <RouteTitleHeading text={activeTitle} />
                 </div>
-                <button
-                  type="button"
-                  onClick={toggleTopbar}
-                  aria-label="Hide top bar"
-                  title="Hide top bar"
-                  className="inline-flex items-center gap-1 border border-[#363A45] bg-[#1E222D] px-2 py-1 text-[9px] uppercase tracking-[0.08em] text-[#787B86] hover:text-[#D1D4DC]"
-                >
-                  <ChevronUp className="h-3.5 w-3.5" />
-                  Hide
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={toggleTheme}
+                    title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                    className="inline-flex items-center gap-1 border border-[var(--border-strong)] bg-[var(--bg-elevated)] px-2 py-1 text-[9px] uppercase tracking-[0.08em] text-[var(--text-dim)] hover:text-[var(--text-primary)]"
+                  >
+                    {theme === "dark" ? <Sun className="h-3 w-3" /> : <Moon className="h-3 w-3" />}
+                    {theme === "dark" ? "Light" : "Dark"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={toggleTopbar}
+                    aria-label="Hide top bar"
+                    title="Hide top bar"
+                    className="inline-flex items-center gap-1 border border-[var(--border-strong)] bg-[var(--bg-elevated)] px-2 py-1 text-[9px] uppercase tracking-[0.08em] text-[var(--text-dim)] hover:text-[var(--text-primary)]"
+                  >
+                    <ChevronUp className="h-3.5 w-3.5" />
+                    Hide
+                  </button>
+                </div>
               </header>
             ) : null}
             {topbarHidden ? (
@@ -109,7 +154,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 onClick={toggleTopbar}
                 aria-label="Show top bar"
                 title="Show top bar"
-                className="absolute right-4 top-3 z-20 inline-flex items-center gap-1 border border-[#363A45] bg-[#1E222D] px-2 py-1 text-[9px] uppercase tracking-[0.08em] text-[#787B86] hover:text-[#D1D4DC]"
+                className="absolute right-4 top-3 z-20 inline-flex items-center gap-1 border border-[var(--border-strong)] bg-[var(--bg-elevated)] px-2 py-1 text-[9px] uppercase tracking-[0.08em] text-text-dim hover:text-text-primary"
               >
                 <ChevronDown className="h-3.5 w-3.5" />
                 Top Bar

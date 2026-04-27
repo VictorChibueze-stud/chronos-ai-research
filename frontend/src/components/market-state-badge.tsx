@@ -2,31 +2,30 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { MarketStateHistoryItem } from "@/lib/types";
+import { MarketContextPanelCompact } from "@/components/market-context-panel-compact";
 
 interface StateConfig {
   color: string;
-  bg: string;
   label: string;
   description: string;
   pulse: boolean;
 }
 
 const STATE_CONFIG: Record<string, StateConfig> = {
-  WAITING:               { color: "#4A4D58", bg: "#1a1a1a",  label: "WAITING",      description: "Global trend identified, no retracement yet",           pulse: false },
-  RETRACEMENT:           { color: "#F5A623", bg: "#2a1f00",  label: "RETRACEM.",    description: "Prime retracement in progress",                          pulse: true  },
-  DEPTH_BUILDING:        { color: "#2196F3", bg: "#001529",  label: "DEPTH",        description: "Walker finding depth levels in retracement",             pulse: true  },
-  CHOCH_ZONE_ACTIVE:     { color: "#9C27B0", bg: "#1a0029",  label: "CHOCH ZONE",   description: "CHoCH zone identified — waiting for price",              pulse: false },
-  CHOCH_TESTED:          { color: "#E91E63", bg: "#290012",  label: "CHOCH TEST",   description: "Price has entered CHoCH zone",                           pulse: true  },
-  CANDIDATE_ACTIVE:      { color: "#00BCD4", bg: "#001f24",  label: "CANDIDATE",    description: "Candidate impulse forming",                              pulse: true  },
-  CANDIDATE_CHOCH_TESTED:{ color: "#4CAF50", bg: "#002200",  label: "CAND CHOCH",   description: "Candidate internal CHoCH has been tested",               pulse: true  },
-  ENTRY_ZONE:            { color: "#00C853", bg: "#001a00",  label: "ENTRY ZONE",   description: "All conditions met — entry zone active",                 pulse: true  },
-  CANDIDATE_CONFIRMED:   { color: "#76FF03", bg: "#1a2900",  label: "CONFIRMED",    description: "Candidate BOS broken — trend continuation confirmed",    pulse: true  },
-  STRUCTURE_BROKEN:      { color: "#FF1744", bg: "#290000",  label: "BROKEN",       description: "Global BOS broken — structural shift",                   pulse: false },
+  WAITING:               { color: "var(--state-waiting)",   label: "WAITING",      description: "Global trend identified, no retracement yet",           pulse: false },
+  RETRACEMENT:           { color: "var(--state-entry)",     label: "RETRACEM.",    description: "Prime retracement in progress",                          pulse: true  },
+  DEPTH_BUILDING:        { color: "var(--state-depth)",     label: "DEPTH",        description: "Walker finding depth levels in retracement",             pulse: true  },
+  CHOCH_ZONE_ACTIVE:     { color: "var(--state-choch)",     label: "CHOCH ZONE",   description: "CHoCH zone identified — waiting for price",              pulse: false },
+  CHOCH_TESTED:          { color: "var(--state-choch)",     label: "CHOCH TEST",   description: "Price has entered CHoCH zone",                           pulse: true  },
+  CANDIDATE_ACTIVE:      { color: "var(--state-candidate)", label: "CANDIDATE",    description: "Candidate impulse forming",                              pulse: true  },
+  CANDIDATE_CHOCH_TESTED:{ color: "var(--state-choch)",     label: "CAND CHOCH",   description: "Candidate internal CHoCH has been tested",               pulse: true  },
+  ENTRY_ZONE:            { color: "var(--state-entry)",     label: "ENTRY ZONE",   description: "All conditions met — entry zone active",                 pulse: true  },
+  CANDIDATE_CONFIRMED:   { color: "var(--state-confirmed)", label: "CONFIRMED",    description: "Candidate BOS broken — trend continuation confirmed",    pulse: true  },
+  STRUCTURE_BROKEN:      { color: "var(--bear)",            label: "BROKEN",       description: "Global BOS broken — structural shift",                   pulse: false },
 };
 
 const DEFAULT_CONFIG: StateConfig = {
-  color: "#4A4D58",
-  bg: "#1a1a1a",
+  color: "var(--state-waiting)",
   label: "UNKNOWN",
   description: "Unknown state",
   pulse: false,
@@ -63,8 +62,8 @@ export function MarketStateBadge({ state, onClick, large }: MarketStateBadgeProp
         alignItems: "center",
         gap: cfg.pulse ? (large ? 6 : 4) : 0,
         padding,
-        background: cfg.bg,
-        border: `1px solid ${cfg.color}66`,
+        background: "transparent",
+        border: `1px solid ${cfg.color}`,
         borderRadius: 2,
         cursor: onClick ? "pointer" : "default",
         fontFamily: "'IBM Plex Mono', monospace",
@@ -73,7 +72,7 @@ export function MarketStateBadge({ state, onClick, large }: MarketStateBadgeProp
         letterSpacing: "0.1em",
         color: cfg.color,
         transition: "border-color 0.15s, box-shadow 0.15s",
-        boxShadow: hover && onClick ? `0 0 0 1px ${cfg.color}44` : "none",
+        boxShadow: hover && onClick ? `0 0 0 1px ${cfg.color}66` : "none",
         outline: "none",
         flexShrink: 0,
       }}
@@ -196,8 +195,8 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
           right: 0,
           bottom: 0,
           width: 420,
-          background: "#0D0F14",
-          borderLeft: "1px solid #2A2E39",
+          background: "var(--bg-base)",
+          borderLeft: "1px solid var(--border-default)",
           zIndex: 901,
           transform: isOpen ? "translateX(0)" : "translateX(420px)",
           transition: "transform 250ms ease",
@@ -210,7 +209,7 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
         <div
           style={{
             padding: "16px 20px",
-            borderBottom: "1px solid #2A2E39",
+            borderBottom: "1px solid var(--border-default)",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
@@ -239,7 +238,7 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
             style={{
               background: "none",
               border: "none",
-              color: "#787B86",
+              color: "var(--text-dim)",
               cursor: "pointer",
               fontSize: 18,
               lineHeight: 1,
@@ -252,13 +251,13 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
         </div>
 
         {/* Strategy Pipeline */}
-        <div style={{ padding: "16px 20px", borderBottom: "1px solid #1E222D" }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--bg-elevated)" }}>
           <div
             style={{
               fontFamily: "'IBM Plex Mono', monospace",
               fontSize: 8,
               letterSpacing: "0.14em",
-              color: "#434651",
+              color: "var(--text-dim)",
               textTransform: "uppercase",
               marginBottom: 14,
             }}
@@ -274,7 +273,7 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
                 top: 8,
                 bottom: 8,
                 width: 1,
-                background: "#2A2E39",
+                background: "var(--border-default)",
               }}
             />
             {pipeline.map((stage, i) => {
@@ -284,13 +283,13 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
                   ? stageCfg.color
                   : stage.status === "active"
                     ? stageCfg.color
-                    : "#2A2E39";
+                    : "var(--border-default)";
               const textColor =
                 stage.status === "complete"
-                  ? "#787B86"
+                  ? "var(--text-dim)"
                   : stage.status === "active"
                     ? stageCfg.color
-                    : "#2A2E39";
+                    : "var(--border-default)";
               return (
                 <div
                   key={stage.key}
@@ -333,7 +332,7 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
                         style={{
                           fontFamily: "'IBM Plex Mono', monospace",
                           fontSize: 8,
-                          color: "#434651",
+                          color: "var(--text-dim)",
                           marginTop: 1,
                           letterSpacing: "0.04em",
                         }}
@@ -352,7 +351,7 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
         <div
           style={{
             padding: "12px 20px",
-            borderBottom: "1px solid #1E222D",
+            borderBottom: "1px solid var(--bg-elevated)",
           }}
         >
           <div
@@ -375,7 +374,7 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
               fontFamily: "'IBM Plex Mono', monospace",
               fontSize: 8,
               letterSpacing: "0.14em",
-              color: "#434651",
+              color: "var(--text-dim)",
               textTransform: "uppercase",
               marginBottom: 14,
             }}
@@ -390,7 +389,7 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
                   key={i}
                   style={{
                     height: 32,
-                    background: "#1E222D",
+                    background: "var(--bg-elevated)",
                     borderRadius: 2,
                     animation: "live-pulse 1.5s ease-in-out infinite",
                   }}
@@ -404,7 +403,7 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
               style={{
                 fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 9,
-                color: "#434651",
+                color: "var(--text-dim)",
                 letterSpacing: "0.06em",
               }}
             >
@@ -422,7 +421,7 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
                   top: 8,
                   bottom: 8,
                   width: 1,
-                  background: "#2A2E39",
+                  background: "var(--border-default)",
                 }}
               />
               {history.map((item, i) => {
@@ -459,7 +458,7 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
                             style={{
                               fontFamily: "'IBM Plex Mono', monospace",
                               fontSize: 8,
-                              color: "#4A4D58",
+                              color: "var(--text-muted)",
                               letterSpacing: "0.04em",
                             }}
                           >
@@ -471,7 +470,7 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
                         style={{
                           fontFamily: "'IBM Plex Mono', monospace",
                           fontSize: 8,
-                          color: "#434651",
+                          color: "var(--text-dim)",
                           marginTop: 3,
                           letterSpacing: "0.04em",
                         }}
@@ -491,11 +490,18 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
           )}
         </div>
 
+        {/* Fundamentals context */}
+        {isOpen && symbol && (
+          <div style={{ padding: "0 20px 16px" }}>
+            <MarketContextPanelCompact symbol={symbol} />
+          </div>
+        )}
+
         {/* Footer */}
         <div
           style={{
             padding: "12px 20px",
-            borderTop: "1px solid #1E222D",
+            borderTop: "1px solid var(--bg-elevated)",
             flexShrink: 0,
             display: "flex",
             alignItems: "center",
@@ -519,3 +525,4 @@ export function MarketStateDrawer({ symbol, state, isOpen, onClose }: MarketStat
     </>
   );
 }
+

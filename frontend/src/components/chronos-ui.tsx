@@ -6,9 +6,9 @@ import { Area, AreaChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YA
 import { twMerge } from "tailwind-merge";
 
 export const C = {
-  bg1: "#0D0F14", bg2: "#111318", bg3: "#1C1E24",
-  border: "#1C1E24", border2: "#2A2E39",
-  text1: "#E8E8EC", text2: "#C8C8D0", text3: "#6B6F7A", text4: "#3A3D48",
+  bg1: "var(--bg-base)", bg2: "var(--bg-surface)", bg3: "var(--border-subtle)",
+  border: "var(--border-subtle)", border2: "var(--border-default)",
+  text1: "var(--text-primary)", text2: "#C8C8D0", text3: "#6B6F7A", text4: "#3A3D48",
   amber: "#F5A623", amberDim: "#C8851A",
   bull: "#4CAF7D", bear: "#E05A5A",
   blue: "#3A6BFF",
@@ -97,7 +97,7 @@ const cn = (...inputs: ClassValue[]) => twMerge(clsx(inputs));
 
 const tokenTextColorClasses: Record<string, string> = {
   "#3A3D48": "text-text4",
-  "#E8E8EC": "text-text1",
+  "var(--text-primary)": "text-text1",
   "#C8C8D0": "text-text2",
   "#6B6F7A": "text-text3",
   "#F5A623": "text-brand-amber",
@@ -106,13 +106,13 @@ const tokenTextColorClasses: Record<string, string> = {
   "#4CAF7D": "text-signal-bull",
   "#E05A5A": "text-signal-bear",
   "#3A6BFF": "text-signal-blue",
-  "#1C1E24": "text-border-faint",
-  "#2A2E39": "text-border-strong",
+  "var(--border-subtle)": "text-border-faint",
+  "var(--border-default)": "text-border-strong",
 };
 
 const tokenBgColorClasses: Record<string, string> = {
-  "#111318": "bg-background-panel",
-  "#1C1E24": "bg-background-surface",
+  "var(--bg-surface)": "bg-background-panel",
+  "var(--border-subtle)": "bg-background-surface",
   "#F5A623": "bg-brand-amber",
   "#C8851A": "bg-brand-amberDim",
   "#5C4A1E": "bg-[#5C4A1E]",
@@ -132,7 +132,7 @@ function Label({ children, color = "#3A3D48" }: LabelProps) {
   );
 }
 
-function Val({ children, color = "#E8E8EC", size = 13 }: ValProps) {
+function Val({ children, color = "var(--text-primary)", size = 13 }: ValProps) {
   return (
     <span className={cn("font-mono font-semibold", valSizeClasses[size] ?? "text-[13px]", tokenTextColorClasses[color] ?? "text-text1")}>
       {children}
@@ -220,15 +220,41 @@ export function StatCard({ label, value, sub, highlight }: StatCardProps) {
   return (
     <div
       className={cn(
-        "flex-1 border border-[#1C1E24] bg-background-panel px-[18px] py-[14px]",
-        highlight ? "border-t-2 border-t-brand-amber" : "border-t border-t-[#1C1E24]",
+        "flex-1 border border-border-default bg-background-surface px-[18px] py-[14px]",
+        highlight ? "border-t-2 border-t-brand-amber" : "border-t border-t-border-default",
       )}
     >
-      <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-[#4A4D58]">{label}</div>
-      <div className={cn("font-mono text-[22px] font-bold leading-none", highlight ? "text-brand-amber" : "text-text1")}>
+      <div
+        style={{
+          fontFamily: "var(--font-sans)",
+          fontSize: 11,
+          fontWeight: 500,
+          color: "var(--text-secondary)",
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          marginBottom: 8,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        className={cn("leading-none", highlight ? "text-brand-amber" : "text-text1")}
+        style={{ fontFamily: "var(--font-mono)", fontSize: 36, fontWeight: 700 }}
+      >
         {value}
       </div>
-      {sub && <div className="mt-1 font-mono text-[10px] text-[#4A4D58]">{sub}</div>}
+      {sub && (
+        <div
+          style={{
+            marginTop: 4,
+            fontFamily: "var(--font-sans)",
+            fontSize: 11,
+            color: "var(--text-dim)",
+          }}
+        >
+          {sub}
+        </div>
+      )}
     </div>
   );
 }
@@ -413,7 +439,7 @@ export function EquityCurve({ trades }: EquityCurveProps) {
             stroke="#F5A623"
             strokeWidth={2}
             fill={`url(#${gradientId})`}
-            activeDot={{ r: 4, fill: "#F5A623", stroke: "#0D0F14", strokeWidth: 2 }}
+            activeDot={{ r: 4, fill: "#F5A623", stroke: "var(--bg-base)", strokeWidth: 2 }}
             dot={false}
             isAnimationActive
           />

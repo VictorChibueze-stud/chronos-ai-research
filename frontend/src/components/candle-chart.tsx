@@ -120,9 +120,14 @@ interface CandleChartProps {
   candidateWalker?: CandidateMovePayload["candidate_walker"];
   /** When false, only candles/volume render; structural overlays load after parent analysis is ready. */
   showAnalysisOverlays?: boolean;
+  /** False during the gap between timeframe/symbol switch and analysis resolving.
+   * Overlays are suppressed to prevent stale props being drawn against new candles. */
+  analysisReady?: boolean;
   isSwitchingTimeframe?: boolean;
   openPaperTrade?: PaperTradeLevels | null;
   showPaperTradeOverlays?: boolean;
+  /** Theme for chart background/text/grid colors. Defaults to "dark". */
+  theme?: "dark" | "light";
 }
 
 function candleTimeSeconds(c: CandleBar): UTCTimestamp | null {
@@ -202,9 +207,11 @@ export default function CandleChart({
   candidatePrimeChochZone = null,
   candidateWalker = null,
   showAnalysisOverlays = true,
+  analysisReady = true,
   isSwitchingTimeframe: _isSwitchingTimeframe = false,
   openPaperTrade = null,
   showPaperTradeOverlays = false,
+  theme = "dark",
 }: CandleChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -293,6 +300,25 @@ export default function CandleChart({
     };
   }, []);
 
+  // Update chart colors when theme changes (separate from init so chart isn't recreated)
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const isDark = theme === "dark";
+    chart.applyOptions({
+      layout: {
+        background: { type: ColorType.Solid, color: isDark ? "#111318" : "#F4F5F7" },
+        textColor: isDark ? "#787B86" : "#5C6070",
+      },
+      grid: {
+        vertLines: { color: isDark ? "#1C1E24" : "#E4E5EA" },
+        horzLines: { color: isDark ? "#1C1E24" : "#E4E5EA" },
+      },
+      rightPriceScale: { borderColor: isDark ? "#1C1E24" : "#D0D2DA" },
+      timeScale: { borderColor: isDark ? "#1C1E24" : "#D0D2DA" },
+    });
+  }, [theme]);
+
   useEffect(() => {
     const chart = chartRef.current;
     const candleSeries = candleSeriesRef.current;
@@ -360,6 +386,17 @@ export default function CandleChart({
       return;
     }
 
+    // Do not render overlays during the gap between
+    // a timeframe switch and analysis resolving.
+    // This prevents stale overlay props from a
+    // previous symbol/timeframe being drawn against
+    // new candle data, which causes the lightweight-
+    // charts asc-order assertion.
+    if (analysisReady === false) {
+      clearOverlays();
+      return;
+    }
+
     clearOverlays();
 
     if (!showAnalysisOverlays) {
@@ -386,8 +423,28 @@ export default function CandleChart({
       return;
     }
 
+    // Build a deduplicated, sorted working copy
+    // of candles for all overlay time lookups.
+    // This must match what candleSeries.setData
+    // received — otherwise overlay timestamps
+    // will reference positions the chart does
+    // not have, triggering the asc-order assertion.
+    const seenOverlayTimes = new Set<number>();
+    const dedupedOverlayCandles = [...candles]
+      .sort((a, b) => {
+        const ta = new Date(a.time as string).getTime();
+        const tb = new Date(b.time as string).getTime();
+        return ta - tb;
+      })
+      .filter((c) => {
+        const t = new Date(c.time as string).getTime();
+        if (seenOverlayTimes.has(t)) return false;
+        seenOverlayTimes.add(t);
+        return true;
+      });
+
     const cleanupItems: Array<() => void> = [];
-    const n = candles.length;
+    const n = dedupedOverlayCandles.length;
     if (n === 0) {
       overlayCleanupRef.current = cleanupItems;
       return;
@@ -399,7 +456,7 @@ export default function CandleChart({
       if (idx < 0 || idx >= n) {
         return null;
       }
-      return candleTimeSeconds(candles[idx]!);
+      return candleTimeSeconds(dedupedOverlayCandles[idx]!);
     };
 
     // Layer 1 — outer leg diagonals (timestamps align to displayed candle slice, not full-series indices)
@@ -408,11 +465,11 @@ export default function CandleChart({
         if (!leg.confirmed) {
           continue;
         }
-        const startIdx = findCandleIndexByTime(candles, leg.start_timestamp);
+        const startIdx = findCandleIndexByTime(dedupedOverlayCandles, leg.start_timestamp);
         if (startIdx === -1) {
           continue;
         }
-        let endIdx = findCandleIndexByTime(candles, leg.end_timestamp);
+        let endIdx = findCandleIndexByTime(dedupedOverlayCandles, leg.end_timestamp);
         if (endIdx === -1) {
           endIdx = lastIdx;
         }
@@ -426,7 +483,7 @@ export default function CandleChart({
           continue;
         }
         const startPrice = leg.start_price;
-        const endPrice = leg.end_price ?? candles[endIdx]!.close;
+        const endPrice = leg.end_price ?? dedupedOverlayCandles[endIdx]!.close;
 
         let color: string;
         if (trendIsDown) {
@@ -465,11 +522,11 @@ export default function CandleChart({
         }
 
         for (const il of internalLegsList(leg)) {
-          const startIdx = findCandleIndexByTime(candles, il.start_timestamp);
+          const startIdx = findCandleIndexByTime(dedupedOverlayCandles, il.start_timestamp);
           if (startIdx === -1) {
             continue;
           }
-          let endIdx = findCandleIndexByTime(candles, il.end_timestamp);
+          let endIdx = findCandleIndexByTime(dedupedOverlayCandles, il.end_timestamp);
           if (endIdx === -1) {
             endIdx = lastIdx;
           }
@@ -484,7 +541,7 @@ export default function CandleChart({
           }
           const startY = il.start_price;
           const endY =
-            il.end_price !== null && il.end_price !== undefined ? il.end_price : candles[endIdx]!.close;
+            il.end_price !== null && il.end_price !== undefined ? il.end_price : dedupedOverlayCandles[endIdx]!.close;
 
           const internalSeries = chart.addSeries(LineSeries, {
             color: "#434651",
@@ -507,11 +564,11 @@ export default function CandleChart({
 
     // Layer 2b — developing move: last confirmed retracement end → current close (white dotted)
     if (provisionalDeveloping) {
-      const pStart = findCandleIndexByTime(candles, provisionalDeveloping.start_timestamp);
+      const pStart = findCandleIndexByTime(dedupedOverlayCandles, provisionalDeveloping.start_timestamp);
       if (pStart !== -1) {
         const pStartT = timeAt(pStart);
         const pEndT = timeAt(lastIdx);
-        const endPx = candles[lastIdx]!.close;
+        const endPx = dedupedOverlayCandles[lastIdx]!.close;
         if (pStartT !== null && pEndT !== null && pStartT !== pEndT) {
           const provSeries = chart.addSeries(LineSeries, {
             color: "#FFFFFF",
@@ -536,7 +593,7 @@ export default function CandleChart({
     // Layer 3 — global BOS segments (impulse end → break bar or last bar)
     if (showGlobalBos !== false) {
       for (const level of bosLevels) {
-        const startIdx = findCandleIndexByTime(candles, level.start_timestamp);
+        const startIdx = findCandleIndexByTime(dedupedOverlayCandles, level.start_timestamp);
         if (startIdx === -1) {
           continue;
         }
@@ -547,7 +604,7 @@ export default function CandleChart({
             endIdx = ei;
           }
         } else if (level.broken && level.end_timestamp) {
-          const ei = findCandleIndexByTime(candles, level.end_timestamp);
+          const ei = findCandleIndexByTime(dedupedOverlayCandles, level.end_timestamp);
           if (ei !== -1) {
             endIdx = ei;
           }
@@ -599,11 +656,11 @@ export default function CandleChart({
       });
     }
     for (const { zone, baseColor, title } of analysisChochBands) {
-        const zStart = findCandleIndexByTime(candles, zone.start_timestamp);
+        const zStart = findCandleIndexByTime(dedupedOverlayCandles, zone.start_timestamp);
         if (zStart === -1) {
           continue;
         }
-        let zEnd = findCandleIndexByTime(candles, zone.end_timestamp);
+        let zEnd = findCandleIndexByTime(dedupedOverlayCandles, zone.end_timestamp);
         if (zEnd === -1) {
           zEnd = lastIdx;
         }
@@ -671,11 +728,11 @@ export default function CandleChart({
           if (!leg.confirmed) {
             continue;
           }
-          const startIdx = findCandleIndexByTime(candles, leg.start_timestamp);
+          const startIdx = findCandleIndexByTime(dedupedOverlayCandles, leg.start_timestamp);
           if (startIdx === -1) {
             continue;
           }
-          let endIdx = findCandleIndexByTime(candles, leg.end_timestamp);
+          let endIdx = findCandleIndexByTime(dedupedOverlayCandles, leg.end_timestamp);
           if (endIdx === -1) {
             endIdx = lastIdx;
           }
@@ -709,7 +766,7 @@ export default function CandleChart({
           });
           tealLegSeries.setData([
             { time: startT, value: leg.start_price },
-            { time: effectiveEndT, value: leg.end_price ?? candles[endIdx]!.close },
+            { time: effectiveEndT, value: leg.end_price ?? dedupedOverlayCandles[endIdx]!.close },
           ]);
           cleanupItems.push(() => {
             chart.removeSeries(tealLegSeries);
@@ -720,14 +777,14 @@ export default function CandleChart({
       const tealBos = candidateMoveTealStructure.bos_levels ?? [];
       if (showCandidateChochZone !== false) {
         for (const level of tealBos) {
-        const startIdx = findCandleIndexByTime(candles, level.start_timestamp);
+        const startIdx = findCandleIndexByTime(dedupedOverlayCandles, level.start_timestamp);
         if (startIdx === -1) {
           continue;
         }
         let endIdx = lastIdx;
         // Slice stack uses bar indices relative to the pivot window; do not use end_index on the full chart.
         if (level.end_timestamp) {
-          const ei = findCandleIndexByTime(candles, level.end_timestamp);
+          const ei = findCandleIndexByTime(dedupedOverlayCandles, level.end_timestamp);
           if (ei !== -1) {
             endIdx = ei;
           }
@@ -766,11 +823,11 @@ export default function CandleChart({
         });
       }
       for (const { zone, title } of tealChochBands) {
-          const zStart = findCandleIndexByTime(candles, zone.start_timestamp);
+          const zStart = findCandleIndexByTime(dedupedOverlayCandles, zone.start_timestamp);
           if (zStart === -1) {
             continue;
           }
-          let zEnd = findCandleIndexByTime(candles, zone.end_timestamp);
+          let zEnd = findCandleIndexByTime(dedupedOverlayCandles, zone.end_timestamp);
           if (zEnd === -1) {
             zEnd = lastIdx;
           }
@@ -839,11 +896,11 @@ export default function CandleChart({
           if (!il.confirmed) {
             continue;
           }
-          const startIdx = findCandleIndexByTime(candles, il.start_timestamp);
+          const startIdx = findCandleIndexByTime(dedupedOverlayCandles, il.start_timestamp);
           if (startIdx === -1) {
             continue;
           }
-          let endIdx = findCandleIndexByTime(candles, il.end_timestamp);
+          let endIdx = findCandleIndexByTime(dedupedOverlayCandles, il.end_timestamp);
           if (endIdx === -1) {
             endIdx = lastIdx;
           }
@@ -863,7 +920,7 @@ export default function CandleChart({
           });
           cPrimeInternalSeries.setData([
             { time: startT, value: il.start_price },
-            { time: endT, value: il.end_price ?? candles[endIdx]!.close },
+            { time: endT, value: il.end_price ?? dedupedOverlayCandles[endIdx]!.close },
           ]);
           cleanupItems.push(() => {
             chart.removeSeries(cPrimeInternalSeries);
@@ -943,11 +1000,11 @@ export default function CandleChart({
         if (Number(zone.depth) !== 1) {
           continue;
         }
-        const startIdx = findCandleIndexByTime(candles, zone.start_timestamp);
+        const startIdx = findCandleIndexByTime(dedupedOverlayCandles, zone.start_timestamp);
         if (startIdx === -1) {
           continue;
         }
-        let endIdx = findCandleIndexByTime(candles, zone.end_timestamp);
+        let endIdx = findCandleIndexByTime(dedupedOverlayCandles, zone.end_timestamp);
         if (endIdx === -1) {
           endIdx = lastIdx;
         }
@@ -1039,9 +1096,10 @@ export default function CandleChart({
         const upper = Math.max(zone.lower_boundary, zone.upper_boundary);
         if (!(upper > lower)) continue;
 
-        const startT = timeAt(0);
+        const levelStartIdx = findCandleIndexByTime(dedupedOverlayCandles, level.start_timestamp);
+        const startT = levelStartIdx !== -1 ? timeAt(levelStartIdx) : timeAt(0);
         const endT = timeAt(lastIdx);
-        if (!startT || !endT) continue;
+        if (!startT || !endT || startT === endT) continue;
 
         const fillColor = hexWithAlphaByte(color, "0D");
         const lineColor = hexWithAlphaByte(color, "55");
@@ -1096,7 +1154,7 @@ export default function CandleChart({
         const structLvl = level.structural_level;
         if (!structLvl?.price) continue;
 
-        const bosStartIdx = Math.floor(candles.length * 0.3);
+        const bosStartIdx = Math.floor(dedupedOverlayCandles.length * 0.3);
         const startT = timeAt(bosStartIdx);
         const endT = timeAt(lastIdx);
         if (!startT || !endT || startT === endT) continue;
@@ -1178,8 +1236,8 @@ export default function CandleChart({
 
     // Layer 6 — Trend start overlay (standalone test visualization)
     if (trendStartOverlay) {
-      const startIdx = findCandleIndexByTime(candles, trendStartOverlay.start_timestamp);
-      const endIdx = candles.length - 1;
+      const startIdx = findCandleIndexByTime(dedupedOverlayCandles, trendStartOverlay.start_timestamp);
+      const endIdx = dedupedOverlayCandles.length - 1;
       if (startIdx !== -1) {
         const startT = timeAt(startIdx);
         const endT = timeAt(endIdx);
@@ -1212,9 +1270,9 @@ export default function CandleChart({
       if (showGlobalLegs !== false) {
         for (const leg of wLegs) {
           if (!leg.confirmed) continue;
-          const startIdx = findCandleIndexByTime(candles, leg.start_timestamp);
+          const startIdx = findCandleIndexByTime(dedupedOverlayCandles, leg.start_timestamp);
           if (startIdx === -1) continue;
-          let endIdx = findCandleIndexByTime(candles, leg.end_timestamp);
+          let endIdx = findCandleIndexByTime(dedupedOverlayCandles, leg.end_timestamp);
           if (endIdx === -1) endIdx = lastIdx;
           endIdx = Math.min(Math.max(endIdx, startIdx), lastIdx);
           const startT = timeAt(startIdx);
@@ -1236,16 +1294,16 @@ export default function CandleChart({
           });
           legSeries.setData([
             { time: startT, value: leg.start_price },
-            { time: endT, value: leg.end_price ?? candles[endIdx]!.close },
+            { time: endT, value: leg.end_price ?? dedupedOverlayCandles[endIdx]!.close },
           ]);
           cleanupItems.push(() => chart.removeSeries(legSeries));
 
           // 7b — Internal dashed lines inside last confirmed impulse only
           if (leg.type === "impulse" && leg === lastWImpulseForInternals) {
             for (const il of leg.internal_legs ?? []) {
-              const ilStart = findCandleIndexByTime(candles, il.start_timestamp);
+              const ilStart = findCandleIndexByTime(dedupedOverlayCandles, il.start_timestamp);
               if (ilStart === -1) continue;
-              let ilEnd = findCandleIndexByTime(candles, il.end_timestamp);
+              let ilEnd = findCandleIndexByTime(dedupedOverlayCandles, il.end_timestamp);
               if (ilEnd === -1) ilEnd = endIdx;
               ilEnd = Math.min(Math.max(ilEnd, ilStart), endIdx);
               const ilT = timeAt(ilStart);
@@ -1261,7 +1319,7 @@ export default function CandleChart({
               });
               ilSeries.setData([
                 { time: ilT, value: il.start_price },
-                { time: ilET, value: il.end_price ?? candles[ilEnd]!.close },
+                { time: ilET, value: il.end_price ?? dedupedOverlayCandles[ilEnd]!.close },
               ]);
               cleanupItems.push(() => chart.removeSeries(ilSeries));
             }
@@ -1272,7 +1330,7 @@ export default function CandleChart({
       // 7d — BOS levels
       if (showGlobalBos !== false) {
         for (const bos of trendWindowStructure.bos_levels ?? []) {
-          const bStart = findCandleIndexByTime(candles, bos.start_timestamp);
+          const bStart = findCandleIndexByTime(dedupedOverlayCandles, bos.start_timestamp);
           if (bStart === -1) continue;
           let bEnd = lastIdx;
           if (typeof bos.end_index === "number" && Number.isFinite(bos.end_index)) {
@@ -1281,7 +1339,7 @@ export default function CandleChart({
               bEnd = ei;
             }
           } else if (bos.broken && bos.end_timestamp) {
-            const ei = findCandleIndexByTime(candles, bos.end_timestamp);
+            const ei = findCandleIndexByTime(dedupedOverlayCandles, bos.end_timestamp);
             if (ei !== -1) bEnd = ei;
           }
           bEnd = Math.min(Math.max(bEnd, bStart), lastIdx);
@@ -1406,6 +1464,7 @@ export default function CandleChart({
     candidatePrimeChochZone,
     candidateWalker,
     showAnalysisOverlays,
+    analysisReady,
     openPaperTrade,
     showPaperTradeOverlays,
   ]);

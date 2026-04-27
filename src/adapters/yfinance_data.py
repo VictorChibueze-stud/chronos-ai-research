@@ -378,6 +378,19 @@ def _df_to_candles(df: pd.DataFrame) -> list[Candle]:
                 )
             )
         candles.sort(key=lambda x: x.timestamp)
+
+        # Deduplicate by timestamp — keep the last
+        # occurrence (most recent data wins).
+        # yfinance can return duplicate month/week
+        # boundary timestamps during transitions.
+        seen_ts: dict[datetime, Candle] = {}
+        for candle in candles:
+            seen_ts[candle.timestamp] = candle
+        candles = sorted(
+            seen_ts.values(),
+            key=lambda x: x.timestamp,
+        )
+
         return candles
     except (TypeError, KeyError, AttributeError) as e:
         logger.warning(

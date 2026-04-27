@@ -164,6 +164,6 @@ export function depthBadgeLabel(depth: number): string {
 
 /** Met depth label color (spec: #2962FF for D1/D2/D3). */
 export function depthBadgeColor(depth: number): string {
-  if (depth <= 0) return "#2A2E39";
+  if (depth <= 0) return "var(--border-default)";
   return "#2962FF";
 }

@@ -24,7 +24,7 @@ export function ScoreRing({ score, size = 86 }: ScoreRingProps) {
 
   return (
     <svg width={size} height={size} viewBox="0 0 86 86" aria-label={`Score ${Math.round(normalized)}`}>
-      <circle cx={43} cy={43} r={r} fill="none" stroke="#1C1E24" strokeWidth={stroke} />
+      <circle cx={43} cy={43} r={r} fill="none" stroke="var(--border-subtle)" strokeWidth={stroke} />
       <circle
         cx={43}
         cy={43}

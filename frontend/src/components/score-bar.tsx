@@ -20,7 +20,7 @@ export function ScoreBar({ value }: ScoreBarProps) {
         style={{
           width: 80,
           height: 3,
-          background: "#1C1E24",
+          background: "var(--border-subtle)",
           borderRadius: 1,
         }}
       >

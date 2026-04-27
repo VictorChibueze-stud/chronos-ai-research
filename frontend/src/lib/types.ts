@@ -88,6 +88,7 @@ export interface Setup {
   total_score?: number;
   timeframe_basis?: "weekly" | "daily";
   market_state?: string | null;
+  is_monitored?: boolean;
 }
 
 export interface UniverseScore {
@@ -235,6 +236,7 @@ export interface WalkerLevel {
   depth: number;
   slice_start?: number;
   slice_end?: number;
+  start_timestamp?: string | null;
   choch_zone?: {
     lower_boundary: number;
     upper_boundary: number;
@@ -542,6 +544,8 @@ export interface PaperAccount {
   entry_timeframe: string;
   min_market_state: string;
   tp_mode: string;
+  entry_lookback_candles?: number;
+  entry_check_interval_hours?: number;
   time_exit_days: number | null;
   is_active: boolean;
   is_paused_drawdown: boolean;
@@ -650,13 +654,25 @@ export interface ManualOverride {
   notes?: string | null;
   created_at?: string;
   updated_at?: string;
+  expires_at?: string | null;
   reset_at?: string | null;
+}
+
+export type ManualRecomputeLayer = "global" | "prime" | "walker" | "candidate";
+
+export interface LayerCacheTimestamps {
+  global?: string | null;
+  prime?: string | null;
+  walker?: string | null;
+  candidate?: string | null;
 }
 
 export interface AnalysisResponse {
   status: string;
   symbol: string;
   timeframe?: string;
+  analysis_computed_at?: string | null;
+  layer_cache_timestamps?: LayerCacheTimestamps | null;
   /** Global structure cache reference: "daily" | "weekly" when served from GlobalStructureCache. */
   reference_timeframe?: string | null;
   structural_state?: {
@@ -763,13 +779,64 @@ export interface FundamentalNewsArticle {
   source_name: string;
   published_at: string;
   sentiment_label: "positive" | "negative" | "neutral";
-  sentiment_score: number;
+  sentiment_score?: number;
   url: string;
+}
+
+/** Single article inside an LLM-generated story cluster timeline. */
+export interface FundamentalArticle {
+  headline: string;
+  source: string;
+  published_at: string;
+  url: string;
+  sentiment: string;
+  relevance: string;
+  popularity_count: number;
+}
+
+/** Actor (person / institution) referenced inside a story cluster. */
+export interface FundamentalActor {
+  name: string;
+  role: string;
+  sentiment: string;
+  relevance: string;
+}
+
+/** LLM-grouped news story for a market. */
+export interface FundamentalStoryCluster {
+  story_id: string;
+  story_title: string;
+  actors: FundamentalActor[];
+  summary: string;
+  overall_sentiment: string;
+  overall_relevance: string;
+  timeline: FundamentalArticle[];
+}
+
+/** Upcoming calendar event attached to the LLM payload. */
+export interface FundamentalUpcomingEvent {
+  event_name: string;
+  event_category: string;
+  scheduled_at: string;
+  impact_level: string;
+  currency: string;
+  forecast_value?: string | null;
+  actual_value?: string | null;
 }
 
 export interface FundamentalNewsResponse {
   symbol: string;
-  articles: FundamentalNewsArticle[];
+  mode: "llm_stories" | "raw_articles";
+  critical_veto_flag: boolean;
+  veto_reason: string | null;
+  risk_summary: string | null;
+  analyzed_at: string | null;
+  prime_impulse_start: string | null;
+  stories: FundamentalStoryCluster[];
+  upcoming_events: FundamentalUpcomingEvent[];
+  article_count?: number;
+  /** Legacy fallback field — present only when mode === "raw_articles". */
+  articles?: FundamentalNewsArticle[];
 }
 
 export type BrokerConnectionTestRequest = BrokerCredentialsInput;

@@ -68,6 +68,46 @@ _RECENT_FETCH_MAX_LOOKBACK_DAYS: dict[str, float] = {
 _CACHE_REFRESH_WORKERS = 1 if DATABASE_URL.lower().startswith("sqlite") else 8
 
 
+# Tracks which (symbol, timeframe) pairs currently have a background refresh
+# running. Guarded by ``_refresh_registry_lock``.
+#   Key:   (symbol_upper, timeframe_lower)
+#   Value: threading.Event that is set when the in-flight refresh completes.
+# Prevents duplicate _bg_refresh threads from piling up for the same
+# symbol+timeframe and starving the DB connection pool.
+_refresh_in_progress: dict[tuple[str, str], threading.Event] = {}
+_refresh_registry_lock = threading.Lock()
+
+
+def _is_refresh_running(symbol: str, timeframe: str) -> bool:
+    """Return True if a refresh is already in progress for this pair."""
+    key = (symbol.upper(), timeframe.lower())
+    with _refresh_registry_lock:
+        return key in _refresh_in_progress
+
+
+def _mark_refresh_started(symbol: str, timeframe: str) -> bool:
+    """Attempt to register this symbol+timeframe as being refreshed.
+
+    Returns True if registration succeeded (caller should proceed).
+    Returns False if a refresh is already running (caller should skip).
+    """
+    key = (symbol.upper(), timeframe.lower())
+    with _refresh_registry_lock:
+        if key in _refresh_in_progress:
+            return False
+        _refresh_in_progress[key] = threading.Event()
+        return True
+
+
+def _mark_refresh_done(symbol: str, timeframe: str) -> None:
+    """Remove the in-progress marker and wake any waiters."""
+    key = (symbol.upper(), timeframe.lower())
+    with _refresh_registry_lock:
+        event = _refresh_in_progress.pop(key, None)
+    if event is not None:
+        event.set()
+
+
 class CandleDataError(Exception):
     def __init__(self, reason: str, message: str, status_code: int = 503):
         super().__init__(message)
@@ -415,6 +455,16 @@ def refresh_candles_recent(symbol: str, timeframe: str, db: Session, recent_coun
 
 
 def _bg_refresh(symbol: str, timeframe: str) -> None:
+    # Deduplicate: if a refresh is already running for this symbol+timeframe,
+    # skip — the in-flight thread will write the latest data anyway.
+    if not _mark_refresh_started(symbol, timeframe):
+        logger.debug(
+            "Skipping duplicate bg_refresh %s %s — already in progress",
+            symbol,
+            timeframe,
+        )
+        return
+
     db = SessionLocal()
     try:
         n = refresh_candles(symbol, timeframe, db)
@@ -423,17 +473,46 @@ def _bg_refresh(symbol: str, timeframe: str) -> None:
         logger.warning("Cache background refresh failed %s %s: %s", symbol, timeframe, e)
     finally:
         db.close()
+        _mark_refresh_done(symbol, timeframe)
 
 
-def get_candles(symbol: str, timeframe: str, db: Session) -> list[Candle]:
-    sym = symbol.upper()
-    tf = timeframe.lower()
-    rows = (
+def _query_candles(
+    db: Session, sym: str, tf: str, limit: int
+) -> list[CandleCache]:
+    """Fetch CandleCache rows in ascending timestamp order.
+
+    When ``limit > 0`` the database does the work via ``ORDER BY timestamp DESC
+    LIMIT N`` (which uses the timestamp index efficiently), then we reverse in
+    Python to restore ascending order. This avoids materialising thousands of
+    Candle objects when the caller only needs the most recent N.
+    """
+    if limit > 0:
+        rows = (
+            db.query(CandleCache)
+            .filter(CandleCache.symbol == sym, CandleCache.timeframe == tf)
+            .order_by(CandleCache.timestamp.desc())
+            .limit(limit)
+            .all()
+        )
+        return list(reversed(rows))
+    return (
         db.query(CandleCache)
         .filter(CandleCache.symbol == sym, CandleCache.timeframe == tf)
         .order_by(CandleCache.timestamp.asc())
         .all()
     )
+
+
+def get_candles(
+    symbol: str,
+    timeframe: str,
+    db: Session,
+    limit: int = 0,
+) -> list[Candle]:
+    """Return cached candles ascending; ``limit > 0`` returns just the last N."""
+    sym = symbol.upper()
+    tf = timeframe.lower()
+    rows = _query_candles(db, sym, tf, limit)
     now = datetime.now(timezone.utc)
 
     if not rows:
@@ -451,12 +530,7 @@ def get_candles(symbol: str, timeframe: str, db: Session) -> list[Candle]:
         _upsert_candles(db, sym, tf, recent_candles)
         # Decouple deep history fetch from the request path.
         threading.Thread(target=_bg_refresh, args=(sym, tf), daemon=True).start()
-        rows = (
-            db.query(CandleCache)
-            .filter(CandleCache.symbol == sym, CandleCache.timeframe == tf)
-            .order_by(CandleCache.timestamp.asc())
-            .all()
-        )
+        rows = _query_candles(db, sym, tf, limit)
         if not rows:
             raise CandleDataError(
                 reason="no_data_for_symbol_timeframe",
